@@ -5,6 +5,7 @@ import { env } from "@kepler-chat/env/server";
 import { Elysia } from "elysia";
 import { conversationsRoute } from "./routes/conversations";
 import { messagesRoute } from "./routes/messages";
+import { requestsRoute } from "./routes/requests";
 import { opencodeManager } from "./services/opencode";
 
 new Elysia()
@@ -19,6 +20,7 @@ new Elysia()
         tags: [
           { name: "Conversations", description: "Manage conversations (OpenCode sessions)" },
           { name: "Messages", description: "Send and receive messages" },
+          { name: "Requests", description: "Handle permission and question prompts" },
         ],
       },
       exclude: ["/api/auth/*", "/"],
@@ -47,7 +49,12 @@ new Elysia()
   })
   .use(conversationsRoute)
   .use(messagesRoute)
+  .use(requestsRoute)
   .get("/", () => "OK")
+  .get("/test-sse", async () => {
+    const html = await Bun.file(import.meta.dir + "/../test-sse.html").text();
+    return new Response(html, { headers: { "Content-Type": "text/html" } });
+  })
   .listen(3000);
 
 console.log("Server is running on http://localhost:3000");

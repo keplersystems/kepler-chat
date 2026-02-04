@@ -1,16 +1,16 @@
 import {
-  createOpencodeServer,
   createOpencodeClient,
   type OpencodeClient,
 } from "@opencode-ai/sdk/v2";
 import { db } from "@kepler-chat/db";
 import { opencodeInstance } from "@kepler-chat/db/schema/opencode";
 import { env } from "@kepler-chat/env/server";
-import { createSandboxConfig, SandboxManager } from "@kepler-chat/sandbox";
+import { wrapCommandForUser } from "@kepler-chat/sandbox";
 import { eq } from "drizzle-orm";
-import { allocatePort, releasePort, isPortAllocated } from "./port-allocator";
+import { allocatePort, releasePort, reservePort } from "./port-allocator";
 import { resolve, join } from "path";
 import { mkdir } from "fs/promises";
+import { spawn, type ChildProcessWithoutNullStreams } from "node:child_process";
 
 type OpencodeInstanceStatus =
   | "starting"
@@ -29,6 +29,192 @@ interface OpencodeInstanceData {
 
 const instances = new Map<string, OpencodeInstanceData>();
 let cleanupInterval: Timer | null = null;
+const OPENCODE_START_TIMEOUT_MS = 5000;
+
+interface OpencodeSpawnResult {
+  url: string;
+  pid: number;
+  close: () => void;
+}
+
+function getUserPath(userId: string): string {
+  return resolve(env.KEPLER_SESSIONS_PATH, userId);
+}
+
+async function prepareUserDirectories(userPath: string): Promise<{
+  xdgData: string;
+  xdgCache: string;
+  xdgConfig: string;
+  xdgState: string;
+}> {
+  const inputPath = join(userPath, "input");
+  const outputPath = join(userPath, "output");
+  const playgroundPath = join(userPath, "playground");
+
+  const opencodeRoot = join(userPath, ".opencode");
+  const xdgData = join(opencodeRoot, "data");
+  const xdgCache = join(opencodeRoot, "cache");
+  const xdgConfig = join(opencodeRoot, "config");
+  const xdgState = join(opencodeRoot, "state");
+
+  await Promise.all([
+    mkdir(userPath, { recursive: true }),
+    mkdir(inputPath, { recursive: true }),
+    mkdir(outputPath, { recursive: true }),
+    mkdir(playgroundPath, { recursive: true }),
+    mkdir(xdgData, { recursive: true }),
+    mkdir(xdgCache, { recursive: true }),
+    mkdir(xdgConfig, { recursive: true }),
+    mkdir(xdgState, { recursive: true }),
+  ]);
+
+  return { xdgData, xdgCache, xdgConfig, xdgState };
+}
+
+function createOpencodeEnv(
+  xdgPaths: {
+    xdgData: string;
+    xdgCache: string;
+    xdgConfig: string;
+    xdgState: string;
+  },
+): NodeJS.ProcessEnv {
+  const existingPermissionRaw = process.env.OPENCODE_PERMISSION;
+  const permissionConfig = existingPermissionRaw
+    ? (JSON.parse(existingPermissionRaw) as Record<string, unknown>)
+    : {};
+  const enforced = ["webfetch", "websearch", "codesearch"] as const;
+
+  for (const tool of enforced) {
+    const current = permissionConfig[tool];
+    if (current === "allow") {
+      throw new Error(
+        `OPENCODE_PERMISSION for "${tool}" must be "ask" or "deny" to enforce network policy.`,
+      );
+    }
+    if (current && typeof current === "object") {
+      for (const action of Object.values(current as Record<string, unknown>)) {
+        if (action === "allow") {
+          throw new Error(
+            `OPENCODE_PERMISSION for "${tool}" must not include "allow" rules to enforce network policy.`,
+          );
+        }
+      }
+    }
+    if (current === undefined) {
+      permissionConfig[tool] = "ask";
+    }
+  }
+
+  return {
+    ...process.env,
+    XDG_DATA_HOME: xdgPaths.xdgData,
+    XDG_CACHE_HOME: xdgPaths.xdgCache,
+    XDG_CONFIG_HOME: xdgPaths.xdgConfig,
+    XDG_STATE_HOME: xdgPaths.xdgState,
+    OPENCODE_PERMISSION: JSON.stringify(permissionConfig),
+  };
+}
+
+function waitForServerUrl(
+  proc: ChildProcessWithoutNullStreams,
+  timeoutMs: number,
+): Promise<string> {
+  return new Promise((resolve, reject) => {
+    const timeoutId = setTimeout(() => {
+      proc.kill();
+      reject(
+        new Error(`Timeout waiting for server to start after ${timeoutMs}ms`),
+      );
+    }, timeoutMs);
+
+    let output = "";
+
+    const cleanup = () => {
+      clearTimeout(timeoutId);
+      proc.stdout.off("data", handleOutput);
+      proc.stderr.off("data", handleOutput);
+      proc.off("exit", handleExit);
+      proc.off("error", handleError);
+    };
+
+    const handleOutput = (chunk: Buffer) => {
+      output += chunk.toString();
+      const lines = output.split("\n");
+      for (const line of lines) {
+        if (line.startsWith("opencode server listening")) {
+          const match = line.match(/on\s+(https?:\/\/[^\s]+)/);
+          if (!match) {
+            proc.kill();
+            cleanup();
+            reject(
+              new Error(`Failed to parse server url from output: ${line}`),
+            );
+            return;
+          }
+          cleanup();
+          resolve(match[1]!);
+          return;
+        }
+      }
+    };
+
+    const handleExit = (code: number | null) => {
+      cleanup();
+      let message = `Server exited with code ${code}`;
+      if (output.trim()) {
+        message += `\nServer output: ${output}`;
+      }
+      reject(new Error(message));
+    };
+
+    const handleError = (error: Error) => {
+      cleanup();
+      reject(error);
+    };
+
+    proc.stdout.on("data", handleOutput);
+    proc.stderr.on("data", handleOutput);
+    proc.on("exit", handleExit);
+    proc.on("error", handleError);
+  });
+}
+
+async function spawnSandboxedOpencodeServer(options: {
+  userId: string;
+  userPath: string;
+  port: number;
+  hostname: string;
+  xdgPaths: {
+    xdgData: string;
+    xdgCache: string;
+    xdgConfig: string;
+    xdgState: string;
+  };
+}): Promise<OpencodeSpawnResult> {
+  const args = [
+    "serve",
+    `--hostname=${options.hostname}`,
+    `--port=${options.port}`,
+  ];
+  const command = `opencode ${args.join(" ")}`;
+  const sandboxedCommand = await wrapCommandForUser(command, options.userId);
+
+  const proc = spawn(sandboxedCommand, {
+    shell: true,
+    cwd: options.userPath,
+    env: createOpencodeEnv(options.xdgPaths),
+    stdio: ["ignore", "pipe", "pipe"],
+  });
+
+  const url = await waitForServerUrl(proc, OPENCODE_START_TIMEOUT_MS);
+
+  return {
+    url,
+    pid: proc.pid ?? 0,
+    close: () => proc.kill(),
+  };
+}
 
 /**
  * Manages OpenCode instance lifecycle for all users.
@@ -49,15 +235,16 @@ export class OpencodeInstanceManager {
     });
 
     for (const instance of runningInstances) {
-      if (!isPortAllocated(instance.port)) {
-        const isHealthy = await this.healthCheck(instance.user_id);
-        if (!isHealthy) {
-          await db
-            .update(opencodeInstance)
-            .set({ status: "stopped" as OpencodeInstanceStatus })
-            .where(eq(opencodeInstance.user_id, instance.user_id));
-        }
+      const isHealthy = await this.healthCheck(instance.user_id);
+      if (isHealthy) {
+        reservePort(instance.port);
+        continue;
       }
+      releasePort(instance.port);
+      await db
+        .update(opencodeInstance)
+        .set({ status: "stopped" as OpencodeInstanceStatus })
+        .where(eq(opencodeInstance.user_id, instance.user_id));
     }
   }
 
@@ -72,6 +259,7 @@ export class OpencodeInstanceManager {
       return existing;
     }
 
+    const userPath = getUserPath(userId);
     const dbInstance = await db.query.opencodeInstance.findFirst({
       where: eq(opencodeInstance.user_id, userId),
     });
@@ -79,8 +267,12 @@ export class OpencodeInstanceManager {
     if (dbInstance?.status === "running") {
       const isHealthy = await this.healthCheck(userId);
       if (isHealthy) {
+        reservePort(dbInstance.port);
         const instanceData = {
-          client: createOpencodeClient({ baseUrl: dbInstance.server_url }),
+          client: createOpencodeClient({
+            baseUrl: dbInstance.server_url,
+            directory: userPath,
+          }),
           url: dbInstance.server_url,
           port: dbInstance.port,
           pid: dbInstance.pid ?? 0,
@@ -109,12 +301,8 @@ export class OpencodeInstanceManager {
    */
   private async spawn(userId: string): Promise<OpencodeInstanceData> {
     const port = await allocatePort();
-    const userPath = resolve(env.KEPLER_SESSIONS_PATH, userId);
-
-    await mkdir(userPath, { recursive: true });
-    await mkdir(join(userPath, "input"), { recursive: true });
-    await mkdir(join(userPath, "output"), { recursive: true });
-    await mkdir(join(userPath, "playground"), { recursive: true });
+    const userPath = getUserPath(userId);
+    const xdgPaths = await prepareUserDirectories(userPath);
 
     const now = Date.now();
     await db
@@ -139,19 +327,16 @@ export class OpencodeInstanceManager {
         },
       });
 
-    const sandboxConfig = createSandboxConfig(userId);
-    await SandboxManager.initialize(sandboxConfig);
-
-    let url: string;
-    let close: () => void | Promise<void>;
+    let server: OpencodeSpawnResult;
 
     try {
-      const result = await createOpencodeServer({
+      server = await spawnSandboxedOpencodeServer({
+        userId,
+        userPath,
         hostname: "127.0.0.1",
         port,
+        xdgPaths,
       });
-      url = result.url;
-      close = result.close;
     } catch (error) {
       releasePort(port);
       await db
@@ -167,30 +352,27 @@ export class OpencodeInstanceManager {
       throw error;
     }
 
-    // Extract PID from spawned process (OpenCode SDK doesn't expose it directly)
-    const pid = 0; // TODO: OpenCode SDK should expose process.pid
-
     await db
       .update(opencodeInstance)
       .set({
         status: "running" as OpencodeInstanceStatus,
-        pid,
+        pid: server.pid,
+        server_url: server.url,
       })
       .where(eq(opencodeInstance.user_id, userId));
 
     const client = createOpencodeClient({
-      baseUrl: url,
+      baseUrl: server.url,
       directory: userPath,
     });
 
     const instanceData: OpencodeInstanceData = {
       client,
-      url,
+      url: server.url,
       port,
-      pid: pid ?? 0,
+      pid: server.pid ?? 0,
       close: async () => {
-        await close();
-        await SandboxManager.reset();
+        await server.close();
         releasePort(port);
       },
     };

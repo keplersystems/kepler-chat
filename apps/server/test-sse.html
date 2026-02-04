@@ -1,0 +1,312 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>SSE Test Client</title>
+  <style>
+    * { box-sizing: border-box; }
+    body { font-family: system-ui, sans-serif; max-width: 800px; margin: 2rem auto; padding: 1rem; }
+    h1 { margin-bottom: 1rem; }
+    .form-group { margin-bottom: 1rem; }
+    label { display: block; margin-bottom: 0.25rem; font-weight: 500; }
+    input, textarea { width: 100%; padding: 0.5rem; border: 1px solid #ccc; border-radius: 4px; }
+    button { padding: 0.5rem 1rem; background: #2563eb; color: white; border: none; border-radius: 4px; cursor: pointer; margin-right: 0.5rem; }
+    button:hover { background: #1d4ed8; }
+    button:disabled { background: #9ca3af; cursor: not-allowed; }
+    button.deny { background: #dc2626; }
+    button.deny:hover { background: #b91c1c; }
+    #output { background: #1e1e1e; color: #d4d4d4; padding: 1rem; border-radius: 4px; min-height: 300px; max-height: 600px; overflow-y: auto; font-family: monospace; font-size: 13px; white-space: pre-wrap; }
+    .event-delta { color: #ce9178; }
+    .event-error { color: #f14c4c; }
+    .event-complete { color: #4ec9b0; }
+    .event-type { color: #569cd6; }
+    .event-tool { color: #dcdcaa; }
+    .event-tool-output { color: #9cdcfe; font-size: 12px; max-height: 200px; overflow-y: auto; display: block; margin: 0.25rem 0; padding: 0.5rem; background: #2d2d2d; border-radius: 4px; }
+    .section { border: 1px solid #e5e7eb; padding: 1rem; border-radius: 8px; margin-bottom: 1rem; }
+    .section h2 { margin-top: 0; font-size: 1.1rem; }
+    .status { padding: 0.25rem 0.5rem; border-radius: 4px; font-size: 0.875rem; }
+    .status.success { background: #d1fae5; color: #065f46; }
+    .status.error { background: #fee2e2; color: #991b1b; }
+    .permission-prompt { background: #fef3c7; border: 1px solid #f59e0b; padding: 0.75rem; border-radius: 4px; margin: 0.5rem 0; }
+    .permission-prompt .title { font-weight: 600; color: #92400e; margin-bottom: 0.5rem; }
+    .permission-prompt .details { font-size: 0.875rem; color: #78350f; margin-bottom: 0.5rem; font-family: monospace; }
+    .permission-prompt button { margin-top: 0.25rem; }
+  </style>
+</head>
+<body>
+  <h1>SSE Test Client</h1>
+
+  <!-- Auth Section -->
+  <div class="section" id="authSection">
+    <h2>1. Sign In</h2>
+    <div class="form-group">
+      <label for="email">Email</label>
+      <input type="email" id="email" placeholder="your@email.com">
+    </div>
+    <div class="form-group">
+      <label for="password">Password</label>
+      <input type="password" id="password" placeholder="password">
+    </div>
+    <button onclick="signIn()">Sign In</button>
+    <span id="authStatus"></span>
+  </div>
+
+  <!-- Chat Section -->
+  <div class="section" id="chatSection">
+    <h2>2. Send Message</h2>
+    <div class="form-group">
+      <label for="convId">Conversation ID</label>
+      <input type="text" id="convId" placeholder="conversation-id">
+    </div>
+    <div class="form-group">
+      <label for="message">Message</label>
+      <textarea id="message" rows="2">What is 5 + 5?</textarea>
+    </div>
+    <button id="sendBtn" onclick="sendMessage()">Send</button>
+    <button id="abortBtn" onclick="abortRequest()" disabled>Abort</button>
+  </div>
+
+  <h2>Output</h2>
+  <div id="output"></div>
+
+  <script>
+    let abortController = null;
+    let currentConvId = null;
+    const toolStates = new Map();
+
+    async function signIn() {
+      const email = document.getElementById('email').value;
+      const password = document.getElementById('password').value;
+      const status = document.getElementById('authStatus');
+
+      try {
+        const res = await fetch('/api/auth/sign-in/email', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ email, password }),
+          credentials: 'include',
+        });
+
+        if (!res.ok) {
+          const text = await res.text();
+          status.className = 'status error';
+          status.textContent = `Failed: ${text}`;
+          return;
+        }
+
+        const data = await res.json();
+        status.className = 'status success';
+        status.textContent = `Signed in as ${data.user.name}`;
+      } catch (err) {
+        status.className = 'status error';
+        status.textContent = `Error: ${err.message}`;
+      }
+    }
+
+    async function replyPermission(requestId, reply) {
+      const convId = currentConvId;
+      if (!convId) return;
+
+      const promptEl = document.getElementById(`perm-${requestId}`);
+      if (promptEl) {
+        promptEl.innerHTML = `<span class="event-type">[permission] ${reply === 'once' ? 'Allowed' : 'Denied'}</span>`;
+      }
+
+      try {
+        const res = await fetch(`/api/conversations/${convId}/permissions/${requestId}/reply`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ reply }),
+          credentials: 'include',
+        });
+
+        if (!res.ok) {
+          const text = await res.text();
+          console.error('Permission reply failed:', text);
+        }
+      } catch (err) {
+        console.error('Permission reply error:', err);
+      }
+    }
+
+    function showPermissionPrompt(data) {
+      const output = document.getElementById('output');
+      const { id, permission, patterns, metadata } = data;
+
+      const promptHtml = `
+<div class="permission-prompt" id="perm-${id}">
+  <div class="title">Permission Request: ${permission}</div>
+  <div class="details">${patterns ? patterns.join(', ') : JSON.stringify(metadata)}</div>
+  <button onclick="replyPermission('${id}', 'once')">Allow Once</button>
+  <button class="deny" onclick="replyPermission('${id}', 'reject')">Deny</button>
+</div>`;
+
+      output.innerHTML += promptHtml;
+      output.scrollTop = output.scrollHeight;
+    }
+
+    function handleToolUpdate(part) {
+      const output = document.getElementById('output');
+      const { callID, tool, state } = part;
+      const elId = `tool-${callID}`;
+
+      if (state.status === 'pending' || state.status === 'running') {
+        if (!toolStates.has(callID)) {
+          toolStates.set(callID, true);
+          const inputStr = state.input ? JSON.stringify(state.input) : '';
+          output.innerHTML += `\n<span class="event-tool" id="${elId}">[${tool}] ${state.status}${inputStr ? ': ' + inputStr : ''}</span>`;
+        }
+      } else if (state.status === 'completed') {
+        const el = document.getElementById(elId);
+        if (el) {
+          let preview = '';
+          if (state.output) {
+            preview = typeof state.output === 'string' 
+              ? state.output.slice(0, 500) + (state.output.length > 500 ? '...' : '')
+              : JSON.stringify(state.output).slice(0, 500);
+          }
+          el.innerHTML = `[${tool}] completed`;
+          if (preview) {
+            el.innerHTML += `<span class="event-tool-output">${escapeHtml(preview)}</span>`;
+          }
+        }
+        toolStates.delete(callID);
+      } else if (state.status === 'error') {
+        const el = document.getElementById(elId);
+        if (el) {
+          el.innerHTML = `<span class="event-error">[${tool}] error: ${escapeHtml(state.error || 'Unknown error')}</span>`;
+        }
+        toolStates.delete(callID);
+      }
+
+      output.scrollTop = output.scrollHeight;
+    }
+
+    async function sendMessage() {
+      const convId = document.getElementById('convId').value.trim();
+      const message = document.getElementById('message').value.trim();
+      const output = document.getElementById('output');
+      const sendBtn = document.getElementById('sendBtn');
+      const abortBtn = document.getElementById('abortBtn');
+
+      if (!convId || !message) {
+        output.innerHTML = '<span class="event-error">Error: Conversation ID and message required</span>';
+        return;
+      }
+
+      currentConvId = convId;
+      toolStates.clear();
+      output.innerHTML = '';
+      sendBtn.disabled = true;
+      abortBtn.disabled = false;
+      abortController = new AbortController();
+
+      try {
+        const response = await fetch(`/api/conversations/${convId}/messages`, {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json',
+            'Accept': 'text/event-stream',
+          },
+          body: JSON.stringify({ text: message }),
+          signal: abortController.signal,
+          credentials: 'include',
+        });
+
+        if (!response.ok) {
+          const text = await response.text();
+          output.innerHTML = `<span class="event-error">Error ${response.status}: ${text}</span>`;
+          return;
+        }
+
+        const reader = response.body.getReader();
+        const decoder = new TextDecoder();
+        let buffer = '';
+
+        while (true) {
+          const { done, value } = await reader.read();
+          if (done) break;
+
+          buffer += decoder.decode(value, { stream: true });
+          const messages = buffer.split('\n\n');
+          buffer = messages.pop() || '';
+
+          for (const msg of messages) {
+            if (!msg.trim()) continue;
+
+            const lines = msg.split('\n');
+            let event = '', data = '';
+
+            for (const line of lines) {
+              if (line.startsWith('event: ')) event = line.slice(7);
+              else if (line.startsWith('data: ')) data = line.slice(6);
+            }
+
+            if (event === 'permission.asked') {
+              try {
+                const parsed = JSON.parse(data);
+                showPermissionPrompt(parsed);
+              } catch {}
+              continue;
+            }
+
+            if (event === 'permission.replied') {
+              continue;
+            }
+
+            if (event === 'message.part.updated') {
+              try {
+                const parsed = JSON.parse(data);
+                const part = parsed.part;
+
+                if (part.type === 'tool') {
+                  handleToolUpdate(part);
+                  continue;
+                }
+
+                if (part.type === 'text' && parsed.delta) {
+                  output.innerHTML += `<span class="event-delta">${escapeHtml(parsed.delta)}</span>`;
+                  output.scrollTop = output.scrollHeight;
+                  continue;
+                }
+              } catch {}
+            }
+
+            if (event === 'message.updated') {
+              try {
+                const parsed = JSON.parse(data);
+                if (parsed.info?.time?.completed) {
+                  output.innerHTML += `\n<span class="event-complete">--- Complete ---</span>\n`;
+                }
+              } catch {}
+            }
+          }
+        }
+
+        output.innerHTML += '\n<span class="event-complete">--- Stream Closed ---</span>';
+      } catch (err) {
+        if (err.name === 'AbortError') {
+          output.innerHTML += '\n<span class="event-error">--- Aborted ---</span>';
+        } else {
+          output.innerHTML += `<span class="event-error">Error: ${err.message}</span>`;
+        }
+      } finally {
+        sendBtn.disabled = false;
+        abortBtn.disabled = true;
+        abortController = null;
+      }
+    }
+
+    function abortRequest() {
+      if (abortController) abortController.abort();
+    }
+
+    function escapeHtml(text) {
+      const div = document.createElement('div');
+      div.textContent = text;
+      return div.innerHTML;
+    }
+  </script>
+</body>
+</html>

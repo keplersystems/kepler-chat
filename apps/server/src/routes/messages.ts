@@ -16,7 +16,39 @@ function getSessionIdFromEvent(event: Event): string | undefined {
       return event.properties.sessionID;
     case "message.part.updated":
       return event.properties.part.sessionID;
+    case "message.part.delta":
+      return event.properties.sessionID;
     case "message.part.removed":
+      return event.properties.sessionID;
+    case "permission.asked":
+      return event.properties.sessionID;
+    case "permission.replied":
+      return event.properties.sessionID;
+    case "question.asked":
+      return event.properties.sessionID;
+    case "question.replied":
+      return event.properties.sessionID;
+    case "question.rejected":
+      return event.properties.sessionID;
+    case "session.status":
+      return event.properties.sessionID;
+    case "session.idle":
+      return event.properties.sessionID;
+    case "session.compacted":
+      return event.properties.sessionID;
+    case "todo.updated":
+      return event.properties.sessionID;
+    case "session.created":
+    case "session.updated":
+    case "session.deleted":
+      return event.properties.info.id;
+    case "session.diff":
+      return event.properties.sessionID;
+    case "command.executed":
+      return event.properties.sessionID;
+    case "session.error":
+      return event.properties.sessionID;
+    case "tui.session.select":
       return event.properties.sessionID;
     default:
       return undefined;
@@ -26,7 +58,12 @@ function getSessionIdFromEvent(event: Event): string | undefined {
 function isMessageComplete(event: Event): boolean {
   if (event.type !== "message.updated") return false;
   const info = event.properties.info;
-  return "completed" in info.time && info.time.completed !== undefined;
+  if (info.role !== "assistant") return false;
+  if (!("completed" in info.time) || info.time.completed === undefined) {
+    return false;
+  }
+  if (!info.finish) return false;
+  return !["tool-calls", "unknown"].includes(info.finish);
 }
 
 export const messagesRoute = new Elysia({ prefix: "/api/conversations" })
@@ -84,57 +121,89 @@ export const messagesRoute = new Elysia({ prefix: "/api/conversations" })
       }
 
       const { client } = await opencodeManager.getOrSpawn(userId);
-      const { stream: eventStream } = await client.event.subscribe();
-
-      const parts: TextPartInput[] = [{ type: "text", text }];
-
-      client.session
-        .prompt({
-          sessionID: conv.opencode_session_id,
-          parts,
-          model: {
-            providerID: "opencode",
-            modelID: "big-pickle",
-          },
-        })
-        .catch((err) => {
-          console.error("Prompt error:", err);
-        });
 
       const stream = new ReadableStream({
         async start(controller) {
           const encoder = new TextEncoder();
+          let closed = false;
+          const abortController = new AbortController();
+
+          const closeStream = () => {
+            if (closed) return;
+            closed = true;
+            controller.close();
+          };
 
           const abortHandler = () => {
-            controller.close();
+            abortController.abort();
+            closeStream();
           };
           context.request.signal.addEventListener("abort", abortHandler);
 
           try {
+            const { stream: eventStream } = await client.event.subscribe(
+              undefined,
+              {
+                signal: abortController.signal,
+              },
+            );
+
+            const parts: TextPartInput[] = [{ type: "text", text }];
+            const promptPromise = (async () => {
+              const result = await client.session.prompt({
+                sessionID: conv.opencode_session_id,
+                parts,
+                model: {
+                  providerID: "opencode",
+                  modelID: "big-pickle",
+                },
+              });
+              if (result.error || !result.data) {
+                throw new Error(
+                  result.error?.message ?? "Failed to send prompt",
+                );
+              }
+              return result.data;
+            })();
+            const promptGuard = promptPromise.catch((err) => {
+              if (context.request.signal.aborted) {
+                return;
+              }
+              const errorMessage = formatSSE(
+                Date.now().toString(),
+                "error",
+                JSON.stringify({
+                  message: err instanceof Error ? err.message : "Unknown error",
+                }),
+              );
+              controller.enqueue(encoder.encode(errorMessage));
+              abortController.abort();
+            });
+
             for await (const event of eventStream) {
               if (context.request.signal.aborted) break;
 
               const eventSessionID = getSessionIdFromEvent(event);
-              if (eventSessionID && eventSessionID !== conv.opencode_session_id) {
+              if (!eventSessionID) {
+                continue;
+              }
+              if (eventSessionID !== conv.opencode_session_id) {
                 continue;
               }
 
-              if (
-                event.type === "message.part.updated" ||
-                event.type === "message.updated"
-              ) {
-                const sseMessage = formatSSE(
-                  Date.now().toString(),
-                  event.type,
-                  JSON.stringify(event.properties),
-                );
-                controller.enqueue(encoder.encode(sseMessage));
-              }
+              const sseMessage = formatSSE(
+                Date.now().toString(),
+                event.type,
+                JSON.stringify(event.properties),
+              );
+              controller.enqueue(encoder.encode(sseMessage));
 
               if (isMessageComplete(event)) {
                 break;
               }
             }
+
+            await promptGuard;
           } catch (error) {
             if (!context.request.signal.aborted) {
               const errorMessage = formatSSE(
@@ -149,7 +218,8 @@ export const messagesRoute = new Elysia({ prefix: "/api/conversations" })
             }
           } finally {
             context.request.signal.removeEventListener("abort", abortHandler);
-            controller.close();
+            abortController.abort();
+            closeStream();
           }
         },
       });
@@ -181,7 +251,7 @@ export const messagesRoute = new Elysia({ prefix: "/api/conversations" })
                 schema: {
                   type: "object",
                   description:
-                    "Events: message.part.updated, message.updated, error",
+                    "Events: all session-scoped event types plus error",
                 },
               },
             },

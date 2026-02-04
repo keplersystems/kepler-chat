@@ -68,24 +68,31 @@ OpenCode maintains its own SQLite database per instance with:
 - Parts (text chunks, tool calls, reasoning blocks)
 - Todos, permissions, etc.
 
-We do NOT replicate this data in Kepler's database.
+This DB is stored under the per-user XDG data directory (see Filesystem
+Structure). We do NOT replicate this data in Kepler's database.
 
 ## Filesystem Structure
 
-Each user gets isolated directory:
+Each user gets an isolated directory:
 ```
 /sessions/{userId}/
   ├── input/       # User-uploaded files, media
   ├── output/      # Agent-generated files
-  └── playground/  # Scratch space for experiments
+  ├── playground/  # Scratch space for experiments
+  └── .opencode/   # Per-user OpenCode state (XDG dirs)
+      ├── data/
+      ├── cache/
+      ├── config/
+      └── state/
 ```
 
-OpenCode's SQLite database is stored in its own internal location (managed by OpenCode).
+OpenCode's SQLite database lives under the per-user XDG data path
+(e.g., `/sessions/{userId}/.opencode/data`).
 
 ## Security Model
 
 ### Sandboxing Configuration
-Uses `@anthropic-ai/sandbox-runtime` with these restrictions:
+Uses `@anthropic-ai/sandbox-runtime` primarily for filesystem isolation:
 
 ```json
 {
@@ -93,13 +100,14 @@ Uses `@anthropic-ai/sandbox-runtime` with these restrictions:
     "denyRead": ["~/.ssh", "~/.aws", "~/.env", "/etc/passwd", "/etc/shadow"],
     "allowWrite": ["/sessions/{userId}/"],
     "denyWrite": [".env", ".git/", ".bashrc", ".zshrc"]
-  },
-  "network": {
-    "allowedDomains": ["api.openai.com", "api.anthropic.com", "*.googleapis.com"],
-    "deniedDomains": []
   }
 }
 ```
+
+**Network policy** is enforced through OpenCode permissions (not OS network
+restrictions) to keep the local OpenCode server reachable on Linux. The server
+sets `OPENCODE_PERMISSION` so `webfetch`, `websearch`, and `codesearch` require
+user approval by default.
 
 ### Multi-User Isolation Strategy
 **Path-based isolation** (MVP approach):
@@ -169,6 +177,14 @@ GET    /api/conversations/:id/messages       # Get message history
 POST   /api/conversations/:id/messages       # Send message (streams SSE)
 ```
 
+### Requests (permissions/questions)
+```
+GET    /api/conversations/:id/requests                     # List pending requests
+POST   /api/conversations/:id/permissions/:requestId/reply # Reply to permission
+POST   /api/conversations/:id/questions/:requestId/reply   # Reply to question
+POST   /api/conversations/:id/questions/:requestId/reject  # Reject question
+```
+
 ### Files
 ```
 POST   /api/conversations/:id/files/upload   # Upload file to input/
@@ -190,6 +206,7 @@ apps/server/src/
 ├── routes/
 │   ├── conversations.ts      # conversation CRUD
 │   ├── messages.ts           # message handling + SSE streaming
+│   ├── requests.ts           # permission/question handling
 │   ├── files.ts              # file upload/download
 │   └── admin.ts              # instance management
 ├── services/
@@ -210,7 +227,8 @@ const { client, url } = await instanceManager.getOrSpawn(userId)
 // 1. Check if instance already running
 // 2. If not, allocate port
 // 3. Create sandbox config
-// 4. Spawn OpenCode server with createOpencodeServer()
+// 4. Spawn OpenCode server via CLI wrapped by sandbox-runtime
+//    (sets per-user XDG_* paths and OPENCODE_PERMISSION)
 // 5. Store instance metadata in DB
 // 6. Return SDK client
 ```
@@ -223,7 +241,7 @@ const { client, url } = await instanceManager.getOrSpawn(userId)
 
 **Respawning**
 - When user sends message after timeout, spawn fresh instance
-- OpenCode's internal DB persists between spawns (in user's session folder)
+- OpenCode's internal DB persists between spawns (per-user XDG data dir)
 - Conversations/messages are not lost
 
 ### Message Flow (SSE Streaming)
@@ -246,30 +264,35 @@ const conv = await db.query.conversation.findFirst({
 
 // 3. Send prompt to OpenCode
 const response = await client.session.prompt({
-  path: { id: conv.opencode_session_id },
-  body: {
-    parts: [{ type: "text", text: message }],
-  }
+  sessionID: conv.opencode_session_id,
+  parts: [{ type: "text", text: message }],
+  model: { providerID: "opencode", modelID: "big-pickle" },
 })
 
 // 4. Subscribe to OpenCode SSE events
-const { stream } = client.event.subscribe()
+const { stream } = await client.event.subscribe()
 
-// 5. Re-broadcast relevant events to frontend via SSE
+// 5. Re-broadcast session-scoped events to frontend via SSE
 for await (const event of stream) {
-  if (event.type === "message.part.delta" || event.type === "message.updated") {
-    // Forward to frontend SSE stream
-  }
+  // Filter by sessionID and forward event payloads
+  // Keep streaming after tool calls; close only when assistant finish is terminal
 }
 ```
 
-**Frontend consumes SSE:**
+The SSE stream ends only after an assistant message reports a terminal finish
+reason (e.g., `stop`, `length`, `content-filter`). It must **not** close on
+`tool-calls` or `unknown` because the model continues after tool results.
+
+**Frontend consumes SSE (POST stream):**
 ```typescript
-const eventSource = new EventSource('/api/conversations/123/messages')
-eventSource.onmessage = (event) => {
-  const data = JSON.parse(event.data)
-  // Update UI with incremental text/tool calls
-}
+const response = await fetch(`/api/conversations/${id}/messages`, {
+  method: "POST",
+  headers: { "Content-Type": "application/json" },
+  body: JSON.stringify({ text }),
+})
+
+const reader = response.body?.getReader()
+// Parse text/event-stream chunks and dispatch by `event:` name
 ```
 
 ### OpenCode SDK Usage Patterns
@@ -279,7 +302,7 @@ eventSource.onmessage = (event) => {
 const { data: session } = await client.session.create({
   title: "New Chat",
   directory: `/sessions/${userId}/playground`,
-}, { throwOnError: true })
+})
 
 // Store in Kepler DB
 await db.insert(conversation).values({
@@ -293,69 +316,64 @@ await db.insert(conversation).values({
 **Sending message:**
 ```typescript
 await client.session.prompt({
-  path: { id: opencodeSessionId },
-  body: {
-    parts: [
-      { type: "text", text: userMessage },
-      // optional: { type: "image", data: base64, mimeType: "..." }
-    ],
-  }
+  sessionID: opencodeSessionId,
+  parts: [
+    { type: "text", text: userMessage },
+    // optional: { type: "image", data: base64, mimeType: "..." }
+  ],
+  model: { providerID: "opencode", modelID: "big-pickle" },
 })
 ```
 
 **Getting message history:**
 ```typescript
 const { data: messages } = await client.session.messages({
-  path: { id: opencodeSessionId }
+  sessionID: opencodeSessionId,
 })
-// Returns MessageV2.WithParts[] array
+// Returns messages with parts
+```
+
+**Responding to permissions/questions:**
+```typescript
+// list pending requests (server-side)
+const { data: permissions } = await client.permission.list()
+const { data: questions } = await client.question.list()
+
+// reply to a permission request
+await client.permission.reply({ requestID, reply: "once" })
+
+// reply or reject a question
+await client.question.reply({ requestID, answers: [["option-1"]] })
+await client.question.reject({ requestID })
 ```
 
 ## Event Types (SSE)
 
-OpenCode emits these events over SSE:
+OpenCode emits many event types over SSE. The backend forwards all
+**session-scoped** events (events that include `sessionID`) and ignores
+events that have no session context.
 
-**Server lifecycle:**
-- `server.connected` - SSE connection established
-- `server.heartbeat` - keepalive ping (every 30s)
+Common session-scoped events:
+- `message.updated` - message info updated (role, tokens, finish)
+- `message.part.updated` - part updated; streaming text uses the `delta` field
+- `message.removed`
+- `permission.asked` / `permission.replied`
+- `question.asked` / `question.replied` / `question.rejected`
+- `session.created` / `session.updated` / `session.deleted`
+- `session.status` / `session.idle` / `session.error`
+- `session.diff`
+- `todo.updated`
+- `command.executed`
 
-**Message events:**
-- `message.updated` - message info updated (role, model, tokens, etc.)
-- `message.part.updated` - part finalized (text, tool call, reasoning)
-- `message.part.delta` - incremental text chunk
-- `message.removed` - message deleted
-
-**Session events:**
-- `session.created` - new session created
-- `session.updated` - session metadata changed
-- `session.deleted` - session deleted
-- `session.diff` - file changes in session directory
-- `session.error` - error during processing
-
-**Permission events:**
-- `permission.asked` - agent requesting permission for tool use
-- `permission.replied` - user granted/denied permission
-
-Frontend should handle these for real-time UI updates.
+Frontend should handle these for real-time UI updates and respond to
+permission/question requests via the Requests API.
 
 ## Error Handling
 
 ### Strategy
-Propagate OpenCode errors mostly as-is, add context:
-
-```typescript
-try {
-  await client.session.prompt(...)
-} catch (error) {
-  // Add context
-  throw {
-    ...error,
-    userId,
-    conversationId,
-    timestamp: Date.now(),
-  }
-}
-```
+Backend handlers throw on OpenCode SDK errors; the Elysia `onError` handler
+maps them to HTTP responses. Routes return 404 for missing conversations or
+missing pending requests; unauthorized requests return 401.
 
 Common OpenCode errors:
 - `NotFoundError` - session/message not found
@@ -385,22 +403,10 @@ KEPLER_PORT_RANGE_END="6000"
 ```
 
 ### OpenCode Instance Config
-Passed to `createOpencodeServer()`:
-
-```typescript
-{
-  hostname: "127.0.0.1",
-  port: allocatedPort,
-  config: {
-    // OpenCode config passed via OPENCODE_CONFIG_CONTENT
-    providers: {
-      anthropic: { apiKey: process.env.OPENCODE_API_KEY_ANTHROPIC },
-      openai: { apiKey: process.env.OPENCODE_API_KEY_OPENAI },
-    },
-    // Other OpenCode settings
-  }
-}
-```
+OpenCode is spawned via CLI (`opencode serve`) with:
+- `--hostname` and `--port`
+- per-user `XDG_*` environment variables to isolate OpenCode state
+- `OPENCODE_PERMISSION` enforced so network tools require approval
 
 ## Frontend Structure
 

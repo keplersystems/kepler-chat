@@ -50,6 +50,14 @@ export function releasePort(port: number): void {
 }
 
 /**
+ * Marks a port as allocated without checking availability.
+ * Used to reserve ports that are already in use by running instances.
+ */
+export function reservePort(port: number): void {
+  usedPorts.add(port);
+}
+
+/**
  * Checks if a port is currently allocated in our tracking.
  */
 export function isPortAllocated(port: number): boolean {

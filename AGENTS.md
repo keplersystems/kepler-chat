@@ -20,6 +20,8 @@ Multi-user LLM chat application using OpenCode as the agent backend with per-use
 
 See `SPEC.md` for full architecture documentation.
 
+See `references/opencode` for OpenCode codebase references.
+
 ## Code Standards
 
 Since this is a production codebase:

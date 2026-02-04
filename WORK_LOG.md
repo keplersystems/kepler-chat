@@ -13,6 +13,7 @@ Multi-user LLM chat with sandboxed OpenCode instances. See `SPEC.md` for archite
 | Auth Middleware | ✅ Done | Better-Auth session validation |
 | Conversations API | ✅ Done | CRUD operations |
 | Messages API | ✅ Done | SSE streaming to frontend |
+| Requests API | ✅ Done | Permission/question list + reply/reject |
 | OpenAPI Docs | ✅ Done | Swagger at /swagger |
 | Graceful Shutdown | ✅ Done | SIGINT/SIGTERM handlers |
 | Port Allocator | ✅ Done | System-level availability checks |
@@ -52,6 +53,7 @@ apps/server/src/
 ├── routes/
 │   ├── conversations.ts           # CRUD
 │   └── messages.ts                # SSE streaming
+│   └── requests.ts                # Permission/question routes
 └── services/opencode.ts           # Manager singleton
 ```
 
@@ -78,8 +80,9 @@ OPENCODE_API_KEY_ANTHROPIC="sk-ant-..."
 - **On-demand spawning** - 30-min idle timeout, respawn on next request
 - **Path-based sandbox** - No root required, adequate for MVP
 - **Port allocator** - Async with system-level availability check (prevents EADDRINUSE)
+- **Permissions** - Client must reply via API (no auto-approve)
 
 ## Known Issues
 
 - Drizzle-orm duplicate versions in node_modules causing LSP type errors (runtime works fine)
-- OpenCode SDK doesn't expose process.pid (using 0, not critical)
+- SSE completion now waits for terminal finish (not `tool-calls`/`unknown`); verify client handles extended streams
