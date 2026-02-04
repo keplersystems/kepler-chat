@@ -1,0 +1,3 @@
+{
+  "extends": "@kepler-chat/config/tsconfig.base.json"
+}

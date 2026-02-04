@@ -11,12 +11,18 @@
   },
   "dependencies": {
     "@elysiajs/cors": "^1.4.1",
+    "@elysiajs/stream": "^1.1.0",
+    "@elysiajs/swagger": "^1.3.1",
     "@kepler-chat/auth": "workspace:*",
     "@kepler-chat/db": "workspace:*",
     "@kepler-chat/env": "workspace:*",
+    "@kepler-chat/opencode-manager": "workspace:*",
+    "@opencode-ai/sdk": "catalog:",
     "better-auth": "catalog:",
     "dotenv": "catalog:",
+    "drizzle-orm": "catalog:",
     "elysia": "^1.4.21",
+    "nanoid": "^5.1.6",
     "zod": "catalog:"
   },
   "devDependencies": {

@@ -51,3 +51,6 @@ temp
 
 # Database
 *.db
+
+.opencode
+references/*

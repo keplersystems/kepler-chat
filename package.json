@@ -13,7 +13,10 @@
       "@types/bun": "^1.3.4",
       "better-auth": "^1.4.18",
       "@libsql/client": "0.15.15",
-      "libsql": "0.5.22"
+      "libsql": "0.5.22",
+      "@anthropic-ai/sandbox-runtime": "^0.0.34",
+      "@opencode-ai/sdk": "^1.1.49",
+      "drizzle-orm": "^0.45.1"
     }
   },
   "type": "module",
@@ -31,7 +34,9 @@
     "db:local": "bun run --filter @kepler-chat/db db:local"
   },
   "dependencies": {
+    "@anthropic-ai/sandbox-runtime": "^0.0.34",
     "@kepler-chat/env": "workspace:*",
+    "@opencode-ai/sdk": "^1.1.49",
     "dotenv": "catalog:",
     "zod": "catalog:"
   },
