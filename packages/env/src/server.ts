@@ -13,6 +13,7 @@ export const env = createEnv({
     KEPLER_INSTANCE_IDLE_TIMEOUT: z.coerce.number().default(1800000),
     KEPLER_PORT_RANGE_START: z.coerce.number().default(5100),
     KEPLER_PORT_RANGE_END: z.coerce.number().default(6000),
+    KEPLER_ADMIN_USER_IDS: z.string().default(""),
   },
   runtimeEnv: process.env,
   emptyStringAsUndefined: true,

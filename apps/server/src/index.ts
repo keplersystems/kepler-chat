@@ -6,6 +6,8 @@ import { Elysia } from "elysia";
 import { conversationsRoute } from "./routes/conversations";
 import { messagesRoute } from "./routes/messages";
 import { requestsRoute } from "./routes/requests";
+import { filesRoute } from "./routes/files";
+import { adminRoute } from "./routes/admin";
 import { opencodeManager } from "./services/opencode";
 
 new Elysia()
@@ -21,6 +23,8 @@ new Elysia()
           { name: "Conversations", description: "Manage conversations (OpenCode sessions)" },
           { name: "Messages", description: "Send and receive messages" },
           { name: "Requests", description: "Handle permission and question prompts" },
+          { name: "Files", description: "Upload and download conversation files" },
+          { name: "Admin", description: "Instance lifecycle management endpoints" },
         ],
       },
       exclude: ["/api/auth/*", "/"],
@@ -50,6 +54,8 @@ new Elysia()
   .use(conversationsRoute)
   .use(messagesRoute)
   .use(requestsRoute)
+  .use(filesRoute)
+  .use(adminRoute)
   .get("/", () => "OK")
   .get("/test-sse", async () => {
     const html = await Bun.file(import.meta.dir + "/../test-sse.html").text();

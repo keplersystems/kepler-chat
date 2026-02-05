@@ -9,10 +9,13 @@
     "preview": "vite preview",
     "prepare": "svelte-kit sync || echo ''",
     "check": "svelte-kit sync && svelte-check --tsconfig ./tsconfig.json",
-    "check:watch": "svelte-kit sync && svelte-check --tsconfig ./tsconfig.json --watch"
+    "check:watch": "svelte-kit sync && svelte-check --tsconfig ./tsconfig.json --watch",
+    "test": "vitest run",
+    "test:watch": "vitest"
   },
   "dependencies": {
     "@kepler-chat/auth": "workspace:*",
+    "@kepler-chat/contracts": "workspace:*",
     "@kepler-chat/env": "workspace:*",
     "@libsql/client": "catalog:",
     "@tanstack/svelte-form": "^1.19.2",
@@ -31,6 +34,7 @@
     "svelte-check": "^4.3.1",
     "tailwindcss": "^4.1.12",
     "typescript": "catalog:",
-    "vite": "^7.1.2"
+    "vite": "^7.1.2",
+    "vitest": "^2.1.8"
   }
 }

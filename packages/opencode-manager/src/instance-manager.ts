@@ -386,15 +386,43 @@ export class OpencodeInstanceManager {
    */
   async teardown(userId: string): Promise<void> {
     const instance = instances.get(userId);
-    if (!instance) return;
+    if (instance) {
+      await db
+        .update(opencodeInstance)
+        .set({ status: "stopping" as OpencodeInstanceStatus })
+        .where(eq(opencodeInstance.user_id, userId));
+
+      await instance.close();
+      instances.delete(userId);
+
+      await db
+        .update(opencodeInstance)
+        .set({ status: "stopped" as OpencodeInstanceStatus, pid: null })
+        .where(eq(opencodeInstance.user_id, userId));
+      return;
+    }
+
+    const dbInstance = await db.query.opencodeInstance.findFirst({
+      where: eq(opencodeInstance.user_id, userId),
+    });
+    if (!dbInstance) {
+      return;
+    }
 
     await db
       .update(opencodeInstance)
       .set({ status: "stopping" as OpencodeInstanceStatus })
       .where(eq(opencodeInstance.user_id, userId));
 
-    await instance.close();
-    instances.delete(userId);
+    if (dbInstance.pid && dbInstance.pid > 0) {
+      try {
+        process.kill(dbInstance.pid, "SIGTERM");
+      } catch {
+        // ignore ESRCH if process already exited
+      }
+    }
+
+    releasePort(dbInstance.port);
 
     await db
       .update(opencodeInstance)
