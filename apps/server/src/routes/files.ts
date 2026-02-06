@@ -178,6 +178,7 @@ export const filesRoute = new Elysia({ prefix: "/api/conversations" })
     {
       params: t.Object({
         id: t.String(),
+        "*": t.String(),
       }),
       query: t.Object({
         scope: t.Optional(t.Union([t.Literal("input"), t.Literal("output")])),

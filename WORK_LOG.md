@@ -22,7 +22,7 @@ Multi-user LLM chat with sandboxed OpenCode instances. See `SPEC.md` for archite
 | OpenAPI Docs | ✅ Done | Swagger at `/swagger` |
 | Graceful Shutdown | ✅ Done | SIGINT/SIGTERM handlers |
 | Port Allocator | ✅ Done | System-level availability checks |
-| Chat UI Rendering | ⏳ Pending | Logic exists, visual UI intentionally deferred |
+| Chat UI Rendering | ✅ Done | Interactive chat UI with sidebar, streaming, requests, and file panel |
 | End-to-End Integration Tests | ⏳ Pending | No full auth+server+opencode E2E suite yet |
 
 ## Current State
@@ -31,8 +31,9 @@ The project now has:
 
 1. A production-ready backend API surface for conversations, messages, requests, files, and admin instance operations.
 2. A shared contracts package that frontend/backend can import to reduce API drift.
-3. A frontend logic skeleton (Svelte 5 rune-based state + route loaders + typed API/SSE client) without final UI implementation.
-4. A focused automated test baseline for critical logic, intentionally avoiding mock-heavy route tests.
+3. A working Svelte chat UI that consumes POST-SSE streams, renders assistant output incrementally, and handles permission/question requests in real time.
+4. A file artifacts experience with preview/download/actions and a collapsible right files panel.
+5. A focused automated test baseline for critical stream/state logic, intentionally avoiding mock-heavy route tests.
 
 Backend server still runs at `http://localhost:3000` with docs at `/swagger`.
 
@@ -143,6 +144,47 @@ This branch/batch intentionally focused on logic and tests, not visual chat comp
 - `bun run --filter web check` -> passing
 - `bun run --filter server build` -> passing
 - `bun run --filter web build` -> passing
+
+## Recent Updates
+
+### Streaming + Requests
+
+- Frontend stream adapter now normalizes OpenCode SSE payloads into stable `MessageView` updates.
+- Fixed out-of-order event handling so user messages are never misclassified as assistant.
+- Added live handling for:
+  - `permission.asked` / `question.asked` (immediate request dialog without refresh)
+  - `permission.replied` / `question.replied` / `question.rejected` (request removal)
+- Reply APIs now use real request IDs end-to-end (removed placeholder `"pending"` behavior).
+
+### Conversation Titles
+
+- Backend now persists OpenCode-generated user summary titles from `message.updated.info.summary.title`.
+- Frontend consumes title updates from stream and updates chat header + sidebar title in real time.
+
+### Files UX
+
+- Fixed file download route validation for wildcard paths (`/:id/files/*`) by accepting `"*"` in params schema.
+- Reworked file panel:
+  - row click previews file content (for supported text/code types)
+  - explicit preview/download buttons
+  - more actions (`copy path`, `copy link`, `open raw`)
+- Removed vertical in-panel collapsible; files list is always visible when files panel is expanded.
+- Added true horizontal collapse/expand for the right files panel (reclaims chat width).
+
+### Sidebar UX
+
+- Added left conversation sidebar collapse/expand behavior.
+- Persisted left-sidebar collapse state in `localStorage`.
+- Persisted right-files-panel collapse state per conversation in `localStorage`.
+
+### Regression Tests Added
+
+- Stream tests now cover:
+  - assistant/user role classification with out-of-order events
+  - generated title extraction from user summaries
+  - live permission request event mapping
+  - suppression of empty tool-phase assistant placeholders
+  - suppression of whitespace-only tool-phase text updates
 
 ## Key Files (Current Snapshot)
 

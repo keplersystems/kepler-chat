@@ -189,7 +189,7 @@ POST   /api/conversations/:id/questions/:requestId/reject  # Reject question
 ```
 POST   /api/conversations/:id/files/upload   # Upload file to input/
 GET    /api/conversations/:id/files/output   # List output files
-GET    /api/conversations/:id/files/:path    # Download file
+GET    /api/conversations/:id/files/*        # Download file (wildcard path)
 ```
 
 ### Instance Management (admin/debug)
@@ -282,6 +282,10 @@ for await (const event of stream) {
 The SSE stream ends only after an assistant message reports a terminal finish
 reason (e.g., `stop`, `length`, `content-filter`). It must **not** close on
 `tool-calls` or `unknown` because the model continues after tool results.
+
+When OpenCode emits a user summary title (`message.updated.info.summary.title`),
+the backend updates the conversation title in Kepler DB to keep sidebar/chat
+titles synchronized with OpenCode-generated naming.
 
 **Frontend consumes SSE (POST stream):**
 ```typescript
@@ -435,23 +439,19 @@ export const isStreaming = $state(false)
 
 ### SSE Client
 ```typescript
-// $lib/sse.ts
-export function subscribeToConversation(id: string, onMessage: (msg) => void) {
-  const eventSource = new EventSource(`/api/conversations/${id}/messages`)
-  
-  eventSource.addEventListener("message.part.delta", (event) => {
-    const data = JSON.parse(event.data)
-    // Append delta to message
-  })
-  
-  eventSource.addEventListener("message.updated", (event) => {
-    const data = JSON.parse(event.data)
-    // Update message metadata
-  })
-  
-  return () => eventSource.close()
+// $lib/api/chat.ts
+export async function streamMessage(id, input, callbacks) {
+  for await (const envelope of sendMessageStream(id, input)) {
+    // message.updated / message.part.updated -> normalized MessageView updates
+    // permission.asked / question.asked -> pending request state updates
+    // permission.replied / question.replied / question.rejected -> resolve requests
+    // message.updated.info.summary.title -> conversation title update callback
+  }
 }
 ```
+
+Frontend uses `fetch(POST /messages)` + `ReadableStream` parsing (not `EventSource`)
+because message send and response streaming happen in one request/response flow.
 
 ## Key Design Decisions
 
@@ -464,8 +464,8 @@ export function subscribeToConversation(id: string, onMessage: (msg) => void) {
 ### Why SSE instead of WebSocket?
 - OpenCode uses SSE natively
 - Simpler protocol (HTTP + text/event-stream)
-- Auto-reconnect built into EventSource API
 - Good enough for one-way streaming (server → client)
+- Works cleanly with POST request streaming for prompt+response in one flow
 
 ### Why thin translation layer?
 - OpenCode SDK is well-designed
@@ -486,9 +486,9 @@ export function subscribeToConversation(id: string, onMessage: (msg) => void) {
    - Option B: TTL-based cleanup (e.g., 30 days)
    - Option C: User-triggered manual cleanup
 
-2. **Conversation title generation**: 
-   - Let OpenCode auto-generate titles (it has built-in title generation)
-   - Or extract from first message on frontend?
+2. **Conversation title generation**:
+   - ✅ Implemented via OpenCode summary title events persisted on backend
+   - Future: allow user overrides/rename API
 
 3. **Rate limiting**:
    - Per-user message rate limits?
@@ -508,3 +508,10 @@ export function subscribeToConversation(id: string, onMessage: (msg) => void) {
 6. Test multi-user isolation
 7. Add file upload/download
 8. Polish UX
+
+## Current UX Notes
+
+- Left conversation sidebar is collapsible; collapse state is persisted in `localStorage`.
+- Right generated-files panel is collapsible (reclaims horizontal space); state is persisted per conversation in `localStorage`.
+- Files list is always visible when the files panel is expanded.
+- File actions include preview, download, copy path, copy link, and open raw.

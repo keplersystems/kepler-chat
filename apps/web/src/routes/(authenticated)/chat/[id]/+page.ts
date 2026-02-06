@@ -1,6 +1,7 @@
 import type { PageLoad } from "./$types";
 import {
   getConversation,
+  listConversations,
   listMessages,
   listRequests,
 } from "$lib/api/chat";
@@ -8,13 +9,15 @@ import {
 export const load: PageLoad = async ({ fetch, params }) => {
   const conversationId = params.id;
 
-  const [conversation, messages, requests] = await Promise.all([
+  const [conversations, conversation, messages, requests] = await Promise.all([
+    listConversations(fetch),
     getConversation(conversationId, fetch),
     listMessages(conversationId, fetch),
     listRequests(conversationId, fetch),
   ]);
 
   return {
+    conversations,
     conversation,
     messages,
     requests: requests.requests,

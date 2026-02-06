@@ -1,5 +1,7 @@
 import { Elysia, t } from "elysia";
 import { db } from "@kepler-chat/db";
+import { conversation } from "@kepler-chat/db/schema/opencode";
+import { eq } from "drizzle-orm";
 import { opencodeManager } from "../services/opencode";
 import { requireAuth } from "../middleware/auth";
 import type { Event, TextPartInput } from "@opencode-ai/sdk/v2";
@@ -66,6 +68,26 @@ function isMessageComplete(event: Event): boolean {
   return !["tool-calls", "unknown"].includes(info.finish);
 }
 
+function getConversationTitleFromEvent(event: Event): string | null {
+  if (event.type !== "message.updated") return null;
+
+  const info = event.properties.info as {
+    role?: string;
+    summary?: { title?: string };
+  };
+
+  if (info.role !== "user") {
+    return null;
+  }
+
+  const title = info.summary?.title?.trim();
+  if (!title) {
+    return null;
+  }
+
+  return title;
+}
+
 export const messagesRoute = new Elysia({ prefix: "/api/conversations" })
   .get(
     "/:id/messages",
@@ -121,6 +143,7 @@ export const messagesRoute = new Elysia({ prefix: "/api/conversations" })
       }
 
       const { client } = await opencodeManager.getOrSpawn(userId);
+      let conversationTitle = conv.title;
 
       const stream = new ReadableStream({
         async start(controller) {
@@ -189,6 +212,18 @@ export const messagesRoute = new Elysia({ prefix: "/api/conversations" })
               }
               if (eventSessionID !== conv.opencode_session_id) {
                 continue;
+              }
+
+              const generatedTitle = getConversationTitleFromEvent(event);
+              if (
+                generatedTitle &&
+                generatedTitle !== conversationTitle
+              ) {
+                await db
+                  .update(conversation)
+                  .set({ title: generatedTitle })
+                  .where(eq(conversation.id, id));
+                conversationTitle = generatedTitle;
               }
 
               const sseMessage = formatSSE(
