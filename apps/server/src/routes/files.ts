@@ -27,6 +27,7 @@ export const filesRoute = new Elysia({ prefix: "/api/conversations" })
     async (context): Promise<UploadFileResponse | { error: string }> => {
       const userId = await requireAuth(context);
       const { id } = context.params;
+      const { file } = context.body;
 
       const conversation = await requireConversationOwnership(id, userId);
       if (!conversation) {
@@ -35,9 +36,6 @@ export const filesRoute = new Elysia({ prefix: "/api/conversations" })
       }
 
       await ensureUserFileDirs(userId);
-      const form = await context.request.formData();
-      const file = form.get("file");
-
       if (!(file instanceof File)) {
         context.set.status = 400;
         return { error: "Missing file upload" };
@@ -62,6 +60,9 @@ export const filesRoute = new Elysia({ prefix: "/api/conversations" })
     {
       params: t.Object({
         id: t.String(),
+      }),
+      body: t.Object({
+        file: t.File(),
       }),
       detail: {
         summary: "Upload file",

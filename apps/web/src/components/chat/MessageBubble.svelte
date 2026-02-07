@@ -14,6 +14,8 @@
       ? message.finish
       : null
   );
+  let displayReasoning = $derived(message.reasoning?.trim() ?? '');
+  let displayToolCalls = $derived(message.toolCalls ?? []);
 </script>
 
 <div class="flex {isUser ? 'justify-end' : 'justify-start'}">
@@ -52,6 +54,42 @@
           <span class="text-xs font-medium uppercase tracking-wide">System</span>
           <p class="mt-1">{message.text}</p>
         {:else}
+          {#if !isUser && displayReasoning.length > 0}
+            <div class="mb-2 rounded-md border border-border/60 bg-muted/60 px-3 py-2 text-xs text-muted-foreground">
+              <div class="mb-1 font-medium">Reasoning</div>
+              <div class="whitespace-pre-wrap">{displayReasoning}</div>
+            </div>
+          {/if}
+          {#if !isUser && displayToolCalls.length > 0}
+            <div class="mb-2 rounded-md border border-border/60 bg-muted/60 px-3 py-2 text-xs text-muted-foreground">
+              <div class="mb-1 font-medium">Tool Calls</div>
+              {#each displayToolCalls as toolCall (toolCall.id)}
+                <div class="mb-2 rounded border border-border/50 bg-background/70 p-2 last:mb-0">
+                  <div class="font-mono text-[11px] font-medium">
+                    {toolCall.name} ({toolCall.status})
+                  </div>
+                  {#if toolCall.input}
+                    <div class="mt-1 text-[11px]">
+                      <span class="font-medium">Input:</span>
+                      <pre class="mt-1 whitespace-pre-wrap break-words font-mono">{toolCall.input}</pre>
+                    </div>
+                  {/if}
+                  {#if toolCall.output}
+                    <div class="mt-1 text-[11px]">
+                      <span class="font-medium">Result:</span>
+                      <pre class="mt-1 whitespace-pre-wrap break-words font-mono">{toolCall.output}</pre>
+                    </div>
+                  {/if}
+                  {#if toolCall.error}
+                    <div class="mt-1 text-[11px] text-destructive">
+                      <span class="font-medium">Error:</span>
+                      <pre class="mt-1 whitespace-pre-wrap break-words font-mono">{toolCall.error}</pre>
+                    </div>
+                  {/if}
+                </div>
+              {/each}
+            </div>
+          {/if}
           <div class="prose prose-sm dark:prose-invert max-w-none">
             {message.text}
           </div>

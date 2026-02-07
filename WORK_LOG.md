@@ -22,6 +22,11 @@ Multi-user LLM chat with sandboxed OpenCode instances. See `SPEC.md` for archite
 | OpenAPI Docs | ✅ Done | Swagger at `/swagger` |
 | Graceful Shutdown | ✅ Done | SIGINT/SIGTERM handlers |
 | Port Allocator | ✅ Done | System-level availability checks |
+| Provider Auth APIs | ✅ Done | Provider catalog + auth set/remove + OAuth authorize/callback |
+| Provider Env Profiles | ✅ Done | Guided multi-env schema/profile endpoints with encrypted storage and restart-on-update |
+| Model Selection Backend | ✅ Done | Conversation model endpoints + required per-message model in messages API |
+| Attachment-to-Prompt Wiring | ✅ Done | Uploaded files are now included in OpenCode `session.prompt` file parts (`file://...`) |
+| Attachment Compatibility Warning UX | ✅ Done | Local pre-send warning in composer for unsupported audio/image/video/pdf modalities; non-blocking |
 | Chat UI Rendering | ✅ Done | Interactive chat UI with sidebar, streaming, requests, and file panel |
 | End-to-End Integration Tests | ⏳ Pending | No full auth+server+opencode E2E suite yet |
 
@@ -34,6 +39,7 @@ The project now has:
 3. A working Svelte chat UI that consumes POST-SSE streams, renders assistant output incrementally, and handles permission/question requests in real time.
 4. A file artifacts experience with preview/download/actions and a collapsible right files panel.
 5. A focused automated test baseline for critical stream/state logic, intentionally avoiding mock-heavy route tests.
+6. Backend-only provider authentication and model selection primitives with encrypted credential mirroring and per-message model persistence.
 
 Backend server still runs at `http://localhost:3000` with docs at `/swagger`.
 
@@ -170,6 +176,22 @@ This branch/batch intentionally focused on logic and tests, not visual chat comp
   - more actions (`copy path`, `copy link`, `open raw`)
 - Removed vertical in-panel collapsible; files list is always visible when files panel is expanded.
 - Added true horizontal collapse/expand for the right files panel (reclaims chat width).
+- Model selector dropdown is now scrollable for long provider/model lists.
+
+### Attachments + Modality UX
+
+- File uploads now flow into message send payload and are attached to OpenCode prompt parts (instead of only being stored under `input/`).
+- Backend validates attachment paths under the authenticated user's `input/` scope and sends `file` parts with MIME metadata.
+- Added local (frontend) compatibility warning when attached files use modalities the selected model may not natively support.
+  - Warning is shown before send.
+  - Sending is still allowed.
+  - Warning explicitly states tools may still handle these files.
+  - Implemented locally in composer (no custom SSE warning event).
+
+### Provider Env Save/Restart Reliability
+
+- Fixed a teardown recursion path in `opencode-manager` for DB-restored instances.
+- Env-profile save/delete endpoints now return success immediately and trigger teardown asynchronously to avoid long “Saving...” UI stalls.
 
 ### Sidebar UX
 
@@ -222,6 +244,8 @@ apps/web/src/
 │       ├── chat.svelte.ts
 │       ├── chat-reducer.ts
 │       └── chat-types.ts
+├── components/chat/
+│   └── MessageInput.svelte
 └── routes/(authenticated)/chat/
     ├── +page.ts
     ├── +page.svelte

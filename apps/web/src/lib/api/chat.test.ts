@@ -35,7 +35,7 @@ describe("streamMessage", () => {
 
     await streamMessage(
       "conv-1",
-      { text: "hi" },
+      { text: "hi", model: { providerID: "opencode", modelID: "big-pickle" } },
       {
         onMessage: (msg) => {
           onMessageCalls.push(msg as { id: string; role: string; text: string });
@@ -71,7 +71,7 @@ describe("streamMessage", () => {
 
     await streamMessage(
       "conv-1",
-      { text: "hi" },
+      { text: "hi", model: { providerID: "opencode", modelID: "big-pickle" } },
       {
         onMessage: (msg) => {
           onMessageCalls.push(msg as { id: string; text: string });
@@ -100,7 +100,7 @@ describe("streamMessage", () => {
 
     await streamMessage(
       "conv-1",
-      { text: "9 + 10" },
+      { text: "9 + 10", model: { providerID: "opencode", modelID: "big-pickle" } },
       {
         onMessage: (msg) => {
           onMessageCalls.push(msg as { id: string; role: string; text: string });
@@ -126,7 +126,7 @@ describe("streamMessage", () => {
 
     await streamMessage(
       "conv-1",
-      { text: "9 + 10" },
+      { text: "9 + 10", model: { providerID: "opencode", modelID: "big-pickle" } },
       {
         onMessage: (msg) => {
           onMessageCalls.push(msg as { id: string; role: string; text: string });
@@ -158,7 +158,7 @@ describe("streamMessage", () => {
 
     await streamMessage(
       "conv-1",
-      { text: "how are you?" },
+      { text: "how are you?", model: { providerID: "opencode", modelID: "big-pickle" } },
       {
         onTitle: (title) => {
           onTitleCalls.push(title);
@@ -183,7 +183,7 @@ describe("streamMessage", () => {
 
     await streamMessage(
       "conv-1",
-      { text: "tell me about you" },
+      { text: "tell me about you", model: { providerID: "opencode", modelID: "big-pickle" } },
       {
         onRequestAdded: (request) => {
           onRequestAddedCalls.push(request as { type: string; request: { id: string } });
@@ -210,7 +210,7 @@ describe("streamMessage", () => {
 
     await streamMessage(
       "conv-1",
-      { text: "what is opencode" },
+      { text: "what is opencode", model: { providerID: "opencode", modelID: "big-pickle" } },
       {
         onMessage: (msg) => {
           onMessageCalls.push(
@@ -242,7 +242,7 @@ describe("streamMessage", () => {
 
     await streamMessage(
       "conv-1",
-      { text: "what is opencode" },
+      { text: "what is opencode", model: { providerID: "opencode", modelID: "big-pickle" } },
       {
         onMessage: (msg) => {
           onMessageCalls.push(msg as { id: string; role: string; text: string });

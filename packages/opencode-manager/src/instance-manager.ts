@@ -8,6 +8,7 @@ import { env } from "@kepler-chat/env/server";
 import { wrapCommandForUser } from "@kepler-chat/sandbox";
 import { eq } from "drizzle-orm";
 import { allocatePort, releasePort, reservePort } from "./port-allocator";
+import { loadUserProviderEnv } from "./provider-env";
 import { resolve, join } from "path";
 import { mkdir } from "fs/promises";
 import { spawn, type ChildProcessWithoutNullStreams } from "node:child_process";
@@ -71,18 +72,20 @@ async function prepareUserDirectories(userPath: string): Promise<{
   return { xdgData, xdgCache, xdgConfig, xdgState };
 }
 
-function createOpencodeEnv(
+async function createOpencodeEnv(
+  userId: string,
   xdgPaths: {
     xdgData: string;
     xdgCache: string;
     xdgConfig: string;
     xdgState: string;
   },
-): NodeJS.ProcessEnv {
+): Promise<NodeJS.ProcessEnv> {
   const existingPermissionRaw = process.env.OPENCODE_PERMISSION;
   const permissionConfig = existingPermissionRaw
     ? (JSON.parse(existingPermissionRaw) as Record<string, unknown>)
     : {};
+  const providerEnv = await loadUserProviderEnv(userId);
   const enforced = ["webfetch", "websearch", "codesearch"] as const;
 
   for (const tool of enforced) {
@@ -108,6 +111,7 @@ function createOpencodeEnv(
 
   return {
     ...process.env,
+    ...providerEnv,
     XDG_DATA_HOME: xdgPaths.xdgData,
     XDG_CACHE_HOME: xdgPaths.xdgCache,
     XDG_CONFIG_HOME: xdgPaths.xdgConfig,
@@ -203,7 +207,7 @@ async function spawnSandboxedOpencodeServer(options: {
   const proc = spawn(sandboxedCommand, {
     shell: true,
     cwd: options.userPath,
-    env: createOpencodeEnv(options.xdgPaths),
+    env: await createOpencodeEnv(options.userId, options.xdgPaths),
     stdio: ["ignore", "pipe", "pipe"],
   });
 
@@ -277,7 +281,14 @@ export class OpencodeInstanceManager {
           port: dbInstance.port,
           pid: dbInstance.pid ?? 0,
           close: async () => {
-            await this.teardown(userId);
+            if (dbInstance.pid && dbInstance.pid > 0) {
+              try {
+                process.kill(dbInstance.pid, "SIGTERM");
+              } catch {
+                // ignore ESRCH if process already exited
+              }
+            }
+            releasePort(dbInstance.port);
           },
         };
         instances.set(userId, instanceData);

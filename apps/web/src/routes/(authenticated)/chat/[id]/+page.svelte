@@ -2,7 +2,12 @@
   import { createChatState } from "$lib/state/chat.svelte";
   import type { MessageView } from "$lib/state/chat-types";
   import type { ConversationDTO, PendingRequestDTO } from "@kepler-chat/contracts";
-  import { api, streamMessage } from "$lib/api/chat";
+  import {
+    api,
+    streamMessage,
+    type Provider,
+    type ModelSelection,
+  } from "$lib/api/chat";
   import { authClient } from "$lib/auth-client";
   import ChatLayout from "../../../../components/chat/ChatLayout.svelte";
   import MessageList from "../../../../components/chat/MessageList.svelte";
@@ -27,6 +32,12 @@
   let isFilesPanelCollapsed = $state(false);
   const FILE_PANEL_STORAGE_PREFIX = "kepler:chat:files-panel-collapsed:";
 
+  // Provider/model state
+  let providers = $state<Provider[]>([]);
+  let connectedProviders = $state<string[]>([]);
+  let selectedModel = $state<ModelSelection | null>(null);
+  let isLoadingProviders = $state(true);
+
   // Local state for files
   let outputFiles: { path: string; size: number; mtime: string; isDir: boolean }[] = $state([]);
 
@@ -49,14 +60,84 @@
           .filter((part) => part?.type === "text" && typeof part.text === "string")
           .map((part) => part.text)
           .join("");
+        const reasoning = (message.parts ?? [])
+          .filter((part) => part?.type === "reasoning" && typeof part.text === "string")
+          .map((part) => part.text)
+          .join("");
+        const toolCalls = (message.parts ?? [])
+          .filter((part) => part?.type === "tool")
+          .map((part, index) => {
+            const tool = part as {
+              id?: string;
+              callID?: string;
+              tool?: string;
+              state?: {
+                status?: "pending" | "running" | "completed" | "error";
+                input?: unknown;
+                output?: string;
+                error?: string;
+              };
+            };
+            return {
+              id: tool.callID ?? tool.id ?? `tool-${id}-${index}`,
+              name: tool.tool ?? "tool",
+              status: tool.state?.status ?? "running",
+              input:
+                tool.state?.input !== undefined
+                  ? JSON.stringify(tool.state.input)
+                  : undefined,
+              output: tool.state?.output,
+              error: tool.state?.error,
+            };
+          });
 
-        if ((role === "assistant" || role === "system") && text.trim().length === 0) {
+        if (
+          (role === "assistant" || role === "system") &&
+          text.trim().length === 0 &&
+          reasoning.trim().length === 0 &&
+          toolCalls.length === 0
+        ) {
           return null;
         }
 
-        return { id, role, text };
+        return { id, role, text, reasoning, toolCalls };
       })
       .filter((message): message is MessageView => message !== null);
+  }
+
+  async function loadProvidersAndModel() {
+    isLoadingProviders = true;
+    try {
+      const [providersResponse, modelResponse] = await Promise.all([
+        api.listProviders(),
+        api.getConversationModel(data.conversation.id),
+      ]);
+
+      providers = providersResponse.providers.all;
+      connectedProviders = providersResponse.providers.connected || [];
+
+      // Use conversation's persisted model if available
+      if (modelResponse.model) {
+        selectedModel = modelResponse.model;
+      } else if (connectedProviders.length > 0 && providers.length > 0) {
+        // Auto-select first available model from first connected provider
+        const firstConnectedProvider = providers.find(p => connectedProviders.includes(p.id));
+        if (firstConnectedProvider?.models) {
+          const modelEntries = Object.entries(firstConnectedProvider.models);
+          if (modelEntries.length > 0) {
+            const [modelId, model] = modelEntries[0];
+            selectedModel = {
+              providerID: firstConnectedProvider.id,
+              modelID: model.id || modelId,
+            };
+          }
+        }
+      }
+    } catch (err) {
+      console.error('Failed to load providers:', err);
+    } finally {
+      isLoadingProviders = false;
+    }
   }
 
   $effect(() => {
@@ -72,6 +153,7 @@
     chatState.setMessages(data.conversation.id, toMessageViewList(data.messages));
     chatState.setPendingRequests(data.requests);
     loadFiles();
+    loadProvidersAndModel();
   });
 
   $effect(() => {
@@ -114,16 +196,35 @@
     }
   }
 
-  async function handleSendMessage(text: string, files?: File[]) {
+  async function handleModelChange(model: ModelSelection) {
+    selectedModel = model;
+    try {
+      await api.setConversationModel(data.conversation.id, model);
+    } catch (err) {
+      console.error('Failed to persist model selection:', err);
+    }
+  }
+
+  async function handleSendMessage(text: string, model: ModelSelection, files?: File[]) {
     if (!text.trim() && (!files || files.length === 0)) return;
+    chatState.setError(null);
+
+    const attachments: Array<{ path: string; mimeType?: string; filename?: string }> = [];
 
     // Upload files first if any
     if (files && files.length > 0) {
       for (const file of files) {
         try {
-          await api.uploadFile(data.conversation.id, file);
+          const uploaded = await api.uploadFile(data.conversation.id, file);
+          attachments.push({
+            path: uploaded.file.path,
+            mimeType: uploaded.file.mimeType,
+            filename: file.name
+          });
         } catch (err) {
-          console.error('Failed to upload file:', err);
+          const message = err instanceof Error ? err.message : 'Failed to upload file';
+          chatState.setError(message);
+          return;
         }
       }
     }
@@ -141,7 +242,7 @@
     try {
       await streamMessage(
         data.conversation.id,
-        { text },
+        { text, model, attachments },
         {
           onMessage: (msg) => {
             chatState.upsertMessage(data.conversation.id, msg as MessageView);
@@ -268,8 +369,12 @@
       <!-- Input -->
       <MessageInput 
         onSubmit={handleSendMessage}
-        disabled={chatState.isStreaming}
-        placeholder="Message..."
+        disabled={chatState.isStreaming || isLoadingProviders}
+        placeholder={isLoadingProviders ? "Loading models..." : "Message..."}
+        {providers}
+        {connectedProviders}
+        {selectedModel}
+        onModelChange={handleModelChange}
       />
     </div>
 

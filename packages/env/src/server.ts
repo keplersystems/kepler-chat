@@ -14,6 +14,16 @@ export const env = createEnv({
     KEPLER_PORT_RANGE_START: z.coerce.number().default(5100),
     KEPLER_PORT_RANGE_END: z.coerce.number().default(6000),
     KEPLER_ADMIN_USER_IDS: z.string().default(""),
+    KEPLER_PROVIDER_CREDENTIALS_KEY: z
+      .string()
+      .min(1)
+      .refine((value) => {
+        try {
+          return Buffer.from(value, "base64").length === 32;
+        } catch {
+          return false;
+        }
+      }, "KEPLER_PROVIDER_CREDENTIALS_KEY must be base64-encoded 32-byte key"),
   },
   runtimeEnv: process.env,
   emptyStringAsUndefined: true,

@@ -1,20 +1,149 @@
 <script lang="ts">
   import Button from '../ui/Button.svelte';
   import Tooltip from '../ui/Tooltip.svelte';
+  import Select from '../ui/Select.svelte';
+  import type { Provider, ModelSelection } from '$lib/api/chat';
 
-  interface Props {
-    onSubmit: (text: string, files?: File[]) => void;
-    disabled?: boolean;
-    placeholder?: string;
+  interface ModelOption {
+    value: string;
+    label: string;
+    providerId: string;
+    modelId: string;
   }
 
-  let { onSubmit, disabled = false, placeholder = 'Message...' }: Props = $props();
+  type AttachmentModality = 'audio' | 'image' | 'video' | 'pdf';
+
+  interface Props {
+    onSubmit: (text: string, model: ModelSelection, files?: File[]) => void;
+    disabled?: boolean;
+    placeholder?: string;
+    providers?: Provider[];
+    connectedProviders?: string[];
+    selectedModel?: ModelSelection | null;
+    onModelChange?: (model: ModelSelection) => void;
+  }
+
+  let { 
+    onSubmit, 
+    disabled = false, 
+    placeholder = 'Message...',
+    providers = [],
+    connectedProviders = [],
+    selectedModel = null,
+    onModelChange
+  }: Props = $props();
 
   let text = $state('');
   let files: File[] = $state([]);
   let textarea: HTMLTextAreaElement | null = $state(null);
   let fileInput: HTMLInputElement | null = $state(null);
   let isDragging = $state(false);
+
+  const modelOptions = $derived.by<ModelOption[]>(() => {
+    const options: ModelOption[] = [];
+    for (const provider of providers) {
+      if (!connectedProviders.includes(provider.id)) continue;
+      if (!provider.models) continue;
+      
+      for (const [modelId, model] of Object.entries(provider.models)) {
+        const id = model.id || modelId;
+        const name = model.name || id;
+        options.push({
+          value: `${provider.id}:${id}`,
+          label: `${provider.name || provider.id} / ${name}`,
+          providerId: provider.id,
+          modelId: id
+        });
+      }
+    }
+    return options;
+  });
+
+  const selectedValue = $derived.by(() => {
+    if (!selectedModel) return '';
+    return `${selectedModel.providerID}:${selectedModel.modelID}`;
+  });
+
+  function handleModelChange(value: string) {
+    const option = modelOptions.find(o => o.value === value);
+    if (option) {
+      onModelChange?.({
+        providerID: option.providerId,
+        modelID: option.modelId
+      });
+    }
+  }
+
+  function fileToModality(file: File): AttachmentModality | null {
+    const mime = file.type.toLowerCase();
+    if (mime.startsWith('audio/')) return 'audio';
+    if (mime.startsWith('image/')) return 'image';
+    if (mime.startsWith('video/')) return 'video';
+    if (mime === 'application/pdf') return 'pdf';
+    return null;
+  }
+
+  function getSelectedModelDefinition() {
+    if (!selectedModel) return null;
+    const provider = providers.find((item) => item.id === selectedModel.providerID);
+    if (!provider?.models) return null;
+    return (
+      provider.models[selectedModel.modelID] ??
+      Object.values(provider.models).find((item) => item.id === selectedModel.modelID) ??
+      null
+    );
+  }
+
+  const compatibilityWarning = $derived.by(() => {
+    if (!selectedModel || files.length === 0) return null;
+
+    const model = getSelectedModelDefinition();
+    if (!model) return null;
+    const hasAttachmentFlag = typeof model.capabilities?.attachment === 'boolean';
+    const hasCapabilityInputFlags =
+      typeof model.capabilities?.input?.audio === 'boolean' ||
+      typeof model.capabilities?.input?.image === 'boolean' ||
+      typeof model.capabilities?.input?.video === 'boolean' ||
+      typeof model.capabilities?.input?.pdf === 'boolean';
+    const hasModalityList =
+      Array.isArray(model.modalities?.input) && model.modalities.input.length > 0;
+    const hasCapabilityMetadata =
+      hasAttachmentFlag || hasCapabilityInputFlags || hasModalityList;
+    if (!hasCapabilityMetadata) return null;
+
+    const supported = new Set<AttachmentModality>();
+    if (model.capabilities?.input?.audio) supported.add('audio');
+    if (model.capabilities?.input?.image) supported.add('image');
+    if (model.capabilities?.input?.video) supported.add('video');
+    if (model.capabilities?.input?.pdf) supported.add('pdf');
+
+    for (const modality of model.modalities?.input ?? []) {
+      if (modality === 'audio' || modality === 'image' || modality === 'video' || modality === 'pdf') {
+        supported.add(modality);
+      }
+    }
+
+    const unsupportedFiles = files
+      .map((file) => ({ file, modality: fileToModality(file) }))
+      .filter(
+        (entry): entry is { file: File; modality: AttachmentModality } =>
+          entry.modality !== null,
+      )
+      .filter((entry) => {
+        if (model.capabilities?.attachment === false) {
+          return true;
+        }
+        return !supported.has(entry.modality);
+      });
+
+    if (unsupportedFiles.length === 0) return null;
+
+    const unsupportedModalities = Array.from(new Set(unsupportedFiles.map((entry) => entry.modality)));
+    return {
+      unsupportedModalities,
+      unsupportedFiles,
+    };
+  });
 
   function handleKeydown(event: KeyboardEvent) {
     if (event.key === 'Enter' && !event.shiftKey) {
@@ -25,7 +154,9 @@
 
   function submit() {
     if (!text.trim() && files.length === 0) return;
-    onSubmit(text.trim(), files.length > 0 ? files : undefined);
+    if (!selectedModel) return;
+    
+    onSubmit(text.trim(), selectedModel, files.length > 0 ? files : undefined);
     text = '';
     files = [];
     adjustHeight();
@@ -44,7 +175,6 @@
       const newFiles = Array.from(input.files);
       files = [...files, ...newFiles];
     }
-    // Reset input to allow selecting the same file again
     input.value = '';
   }
 
@@ -111,6 +241,33 @@
         </div>
       {/if}
 
+      <!-- Model Selector -->
+      <div class="flex items-center gap-2">
+        <Select
+          items={modelOptions}
+          value={selectedValue}
+          placeholder={modelOptions.length === 0 ? "No models available" : "Select model..."}
+          disabled={disabled || modelOptions.length === 0}
+          onChange={handleModelChange}
+          triggerClass="h-8 text-xs w-auto min-w-[180px]"
+        />
+        {#if !selectedModel && modelOptions.length > 0}
+          <span class="text-xs text-destructive">Select a model to send messages</span>
+        {/if}
+      </div>
+
+      {#if compatibilityWarning}
+        <div class="rounded-md border border-amber-300 bg-amber-50 px-3 py-2 text-xs text-amber-950 dark:border-amber-700 dark:bg-amber-950/40 dark:text-amber-100">
+          <div>
+            Selected model may not natively support: {compatibilityWarning.unsupportedModalities.join(', ')}.
+            Tools may still handle these files.
+          </div>
+          <div class="mt-1">
+            Files: {compatibilityWarning.unsupportedFiles.map((entry) => entry.file.name).join(', ')}
+          </div>
+        </div>
+      {/if}
+
       <!-- Input Area -->
       <div class="flex items-end gap-2">
         <input
@@ -143,7 +300,7 @@
             onkeydown={handleKeydown}
             oninput={adjustHeight}
             {placeholder}
-            {disabled}
+            disabled={disabled || !selectedModel}
             rows="1"
             class="flex w-full resize-none rounded-md border border-input bg-transparent px-3 py-2 text-sm shadow-sm placeholder:text-muted-foreground focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring disabled:cursor-not-allowed disabled:opacity-50"
             style="min-height: 40px; max-height: 200px;"
@@ -155,7 +312,7 @@
 
         <Button
           onclick={submit}
-          disabled={disabled || (!text.trim() && files.length === 0)}
+          disabled={disabled || !selectedModel || (!text.trim() && files.length === 0)}
           size="icon"
         >
           <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">

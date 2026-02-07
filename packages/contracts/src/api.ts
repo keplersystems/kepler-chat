@@ -19,6 +19,15 @@ export interface DeleteConversationResponse {
 
 export interface SendMessageInput {
   text: string;
+  model: {
+    providerID: string;
+    modelID: string;
+  };
+  attachments?: Array<{
+    path: string;
+    mimeType?: string;
+    filename?: string;
+  }>;
 }
 
 export const permissionReplySchema = z.enum(["once", "always", "reject"]);

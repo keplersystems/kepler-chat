@@ -55,10 +55,34 @@ export const conversation = sqliteTable("conversation", {
   user_id: text().notNull().references(() => user.id, { onDelete: "cascade" }),
   opencode_session_id: text().notNull(), // OpenCode's internal session ID
   title: text().notNull(),
+  provider_id: text(), // optional conversation-level model default
+  model_id: text(), // optional conversation-level model default
   ...Timestamps,
 }, (table) => [
   index("conversation_user_idx").on(table.user_id),
 ])
+
+// User-scoped mirrored provider credentials (encrypted payload)
+export const providerCredential = sqliteTable("provider_credential", {
+  user_id: text().notNull().references(() => user.id, { onDelete: "cascade" }),
+  provider_id: text().notNull(),
+  auth_type: text().notNull(), // "api" | "wellknown" | "oauth"
+  encrypted_payload: text().notNull(),
+  iv: text().notNull(),
+  auth_tag: text().notNull(),
+  key_version: integer().notNull(),
+  ...Timestamps,
+})
+
+// Per-message model audit trail (for per-message model switching)
+export const conversationMessageModel = sqliteTable("conversation_message_model", {
+  conversation_id: text().notNull().references(() => conversation.id, { onDelete: "cascade" }),
+  user_id: text().notNull().references(() => user.id, { onDelete: "cascade" }),
+  opencode_message_id: text().notNull(),
+  provider_id: text().notNull(),
+  model_id: text().notNull(),
+  created_at: integer({ mode: "timestamp_ms" }).notNull(),
+})
 ```
 
 ### OpenCode Database
@@ -185,6 +209,26 @@ POST   /api/conversations/:id/questions/:requestId/reply   # Reply to question
 POST   /api/conversations/:id/questions/:requestId/reject  # Reject question
 ```
 
+### Providers (auth + catalog)
+```
+GET    /api/providers                                  # Provider/model catalog + auth methods + mirrored credential metadata
+GET    /api/providers/:providerId/env-schema           # Provider env variable schema for guided setup
+GET    /api/providers/:providerId/env-profile          # Get saved provider env profile (secrets masked)
+PUT    /api/providers/:providerId/env-profile          # Save provider env profile (encrypted, async instance restart)
+DELETE /api/providers/:providerId/env-profile          # Delete provider env profile (async instance restart)
+POST   /api/providers/:providerId/auth                 # Set provider auth (api/wellknown)
+DELETE /api/providers/:providerId/auth                 # Remove provider auth
+POST   /api/providers/:providerId/oauth/authorize      # Start OAuth flow for provider
+POST   /api/providers/:providerId/oauth/callback       # Complete OAuth callback
+```
+
+### Model Selection
+```
+GET    /api/conversations/:id/model                    # Get conversation-level model selection
+PUT    /api/conversations/:id/model                    # Persist conversation-level model selection
+POST   /api/conversations/:id/messages                 # Send message with required per-message model
+```
+
 ### Files
 ```
 POST   /api/conversations/:id/files/upload   # Upload file to input/
@@ -249,7 +293,7 @@ const { client, url } = await instanceManager.getOrSpawn(userId)
 **Client sends message:**
 ```
 POST /api/conversations/{id}/messages
-Body: { text: "Hello", attachments: [...] }
+Body: { text: "Hello", model: { providerID, modelID }, attachments: [...] }
 ```
 
 **Backend handles request:**
@@ -265,8 +309,11 @@ const conv = await db.query.conversation.findFirst({
 // 3. Send prompt to OpenCode
 const response = await client.session.prompt({
   sessionID: conv.opencode_session_id,
-  parts: [{ type: "text", text: message }],
-  model: { providerID: "opencode", modelID: "big-pickle" },
+  parts: [
+    { type: "text", text: message },
+    { type: "file", url: "file:///.../input/foo.png", filename: "foo.png", mime: "image/png" },
+  ],
+  model: { providerID, modelID },
 })
 
 // 4. Subscribe to OpenCode SSE events
@@ -278,6 +325,14 @@ for await (const event of stream) {
   // Keep streaming after tool calls; close only when assistant finish is terminal
 }
 ```
+
+### Attachment Compatibility Warning (Current UX)
+
+- Compatibility checks are done locally in the message composer using provider/model metadata from `GET /api/providers`.
+- For attached `audio/image/video/pdf` files, the frontend compares file modality against model capability metadata (`capabilities.input.*`, `modalities.input`, `capabilities.attachment` when present).
+- If a mismatch is detected, the UI shows a pre-send warning.
+- Message sending is still allowed (warning only).
+- Warning copy explicitly notes that tools may still handle unsupported modalities.
 
 The SSE stream ends only after an assistant message reports a terminal finish
 reason (e.g., `stop`, `length`, `content-filter`). It must **not** close on

@@ -8,6 +8,8 @@ import { messagesRoute } from "./routes/messages";
 import { requestsRoute } from "./routes/requests";
 import { filesRoute } from "./routes/files";
 import { adminRoute } from "./routes/admin";
+import { providersRoute } from "./routes/providers";
+import { modelsRoute } from "./routes/models";
 import { opencodeManager } from "./services/opencode";
 
 new Elysia()
@@ -25,6 +27,8 @@ new Elysia()
           { name: "Requests", description: "Handle permission and question prompts" },
           { name: "Files", description: "Upload and download conversation files" },
           { name: "Admin", description: "Instance lifecycle management endpoints" },
+          { name: "Providers", description: "Provider auth and model catalog endpoints" },
+          { name: "Models", description: "Conversation model selection endpoints" },
         ],
       },
       exclude: ["/api/auth/*", "/"],
@@ -33,7 +37,7 @@ new Elysia()
   .use(
     cors({
       origin: env.CORS_ORIGIN,
-      methods: ["GET", "POST", "DELETE", "OPTIONS"],
+      methods: ["GET", "POST", "PUT", "DELETE", "OPTIONS"],
       allowedHeaders: ["Content-Type", "Authorization", "Cookie"],
       credentials: true,
     }),
@@ -56,6 +60,8 @@ new Elysia()
   .use(requestsRoute)
   .use(filesRoute)
   .use(adminRoute)
+  .use(providersRoute)
+  .use(modelsRoute)
   .get("/", () => "OK")
   .get("/test-sse", async () => {
     const html = await Bun.file(import.meta.dir + "/../test-sse.html").text();

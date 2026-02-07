@@ -1,10 +1,13 @@
 import { Elysia, t } from "elysia";
 import { db } from "@kepler-chat/db";
-import { conversation } from "@kepler-chat/db/schema/opencode";
+import { conversation, conversationMessageModel } from "@kepler-chat/db/schema/opencode";
 import { eq } from "drizzle-orm";
 import { opencodeManager } from "../services/opencode";
 import { requireAuth } from "../middleware/auth";
-import type { Event, TextPartInput } from "@opencode-ai/sdk/v2";
+import type { Event, FilePartInput, TextPartInput } from "@opencode-ai/sdk/v2";
+import { basename } from "node:path";
+import { pathToFileURL } from "node:url";
+import { getUserInputPath, resolveSafeFilePath, statOrNull } from "../lib/files";
 
 function formatSSE(id: string, event: string, data: string): string {
   return `id: ${id}\nevent: ${event}\ndata: ${data}\n\n`;
@@ -88,6 +91,24 @@ function getConversationTitleFromEvent(event: Event): string | null {
   return title;
 }
 
+interface ProviderModelCatalog {
+  id?: string;
+  models?: Record<string, { id?: string }>;
+}
+
+function hasProviderModel(providers: ProviderModelCatalog[], providerId: string, modelId: string): boolean {
+  const provider = providers.find((item) => item.id === providerId);
+  if (!provider?.models) {
+    return false;
+  }
+
+  if (modelId in provider.models) {
+    return true;
+  }
+
+  return Object.values(provider.models).some((model) => model.id === modelId);
+}
+
 export const messagesRoute = new Elysia({ prefix: "/api/conversations" })
   .get(
     "/:id/messages",
@@ -131,7 +152,7 @@ export const messagesRoute = new Elysia({ prefix: "/api/conversations" })
     async (context) => {
       const userId = await requireAuth(context);
       const { id } = context.params;
-      const { text } = context.body;
+      const { text, model, attachments = [] } = context.body;
 
       const conv = await db.query.conversation.findFirst({
         where: (fields, { and, eq }) =>
@@ -143,6 +164,69 @@ export const messagesRoute = new Elysia({ prefix: "/api/conversations" })
       }
 
       const { client } = await opencodeManager.getOrSpawn(userId);
+      const { data: providerCatalog, error: providerCatalogError } =
+        await client.provider.list();
+      if (providerCatalogError || !providerCatalog) {
+        throw new Error("Failed to fetch provider catalog");
+      }
+
+      if (
+        !hasProviderModel(
+          providerCatalog.all as ProviderModelCatalog[],
+          model.providerID,
+          model.modelID,
+        )
+      ) {
+        context.set.status = 400;
+        return { error: "Invalid provider/model selection" };
+      }
+
+      if (!providerCatalog.connected.includes(model.providerID)) {
+        context.set.status = 400;
+        return { error: "Selected provider is not authenticated" };
+      }
+
+      const trimmedText = text.trim();
+      if (trimmedText.length === 0 && attachments.length === 0) {
+        context.set.status = 400;
+        return { error: "Message text or attachment is required" };
+      }
+
+      const inputBasePath = getUserInputPath(userId);
+      const fileParts: FilePartInput[] = [];
+      for (const attachment of attachments) {
+        let absolutePath: string;
+        try {
+          absolutePath = resolveSafeFilePath(inputBasePath, attachment.path);
+        } catch {
+          context.set.status = 400;
+          return { error: `Invalid attachment path: ${attachment.path}` };
+        }
+
+        const stats = await statOrNull(absolutePath);
+        if (!stats || !stats.isFile()) {
+          context.set.status = 400;
+          return { error: `Attachment not found: ${attachment.path}` };
+        }
+
+        const detectedMimeType = Bun.file(absolutePath).type;
+        const finalMimeType = attachment.mimeType?.trim() || detectedMimeType || "application/octet-stream";
+        fileParts.push({
+          type: "file",
+          url: pathToFileURL(absolutePath).toString(),
+          filename: attachment.filename?.trim() || basename(attachment.path),
+          mime: finalMimeType,
+        });
+      }
+
+      await db
+        .update(conversation)
+        .set({
+          provider_id: model.providerID,
+          model_id: model.modelID,
+        })
+        .where(eq(conversation.id, id));
+
       let conversationTitle = conv.title;
 
       const stream = new ReadableStream({
@@ -171,21 +255,39 @@ export const messagesRoute = new Elysia({ prefix: "/api/conversations" })
               },
             );
 
-            const parts: TextPartInput[] = [{ type: "text", text }];
+            const parts: Array<TextPartInput | FilePartInput> = [];
+            if (trimmedText.length > 0) {
+              parts.push({ type: "text", text: trimmedText });
+            }
+            parts.push(...fileParts);
             const promptPromise = (async () => {
               const result = await client.session.prompt({
                 sessionID: conv.opencode_session_id,
                 parts,
-                model: {
-                  providerID: "opencode",
-                  modelID: "big-pickle",
-                },
+                model,
               });
               if (result.error || !result.data) {
                 throw new Error(
                   result.error?.message ?? "Failed to send prompt",
                 );
               }
+
+              if ("info" in result.data && "parentID" in result.data.info) {
+                const parentID = result.data.info.parentID;
+                if (typeof parentID === "string" && parentID.length > 0) {
+                  await db
+                    .insert(conversationMessageModel)
+                    .values({
+                      conversation_id: id,
+                      user_id: userId,
+                      opencode_message_id: parentID,
+                      provider_id: model.providerID,
+                      model_id: model.modelID,
+                    })
+                    .onConflictDoNothing();
+                }
+              }
+
               return result.data;
             })();
             const promptGuard = promptPromise.catch((err) => {
@@ -272,7 +374,20 @@ export const messagesRoute = new Elysia({ prefix: "/api/conversations" })
         id: t.String(),
       }),
       body: t.Object({
-        text: t.String({ minLength: 1 }),
+        text: t.String(),
+        model: t.Object({
+          providerID: t.String({ minLength: 1 }),
+          modelID: t.String({ minLength: 1 }),
+        }),
+        attachments: t.Optional(
+          t.Array(
+            t.Object({
+              path: t.String({ minLength: 1 }),
+              mimeType: t.Optional(t.String({ minLength: 1 })),
+              filename: t.Optional(t.String({ minLength: 1 })),
+            }),
+          ),
+        ),
       }),
       detail: {
         summary: "Send message",

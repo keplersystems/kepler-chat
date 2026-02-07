@@ -11,12 +11,96 @@ import type {
   SuccessResponse,
   UploadFileResponse,
 } from "@kepler-chat/contracts";
+import type { ToolCallView } from "$lib/state/chat-types";
+
+export interface Provider {
+  id: string;
+  name?: string;
+  models?: Record<
+    string,
+    {
+      id?: string;
+      name?: string;
+      capabilities?: {
+        attachment?: boolean;
+        input?: {
+          text?: boolean;
+          audio?: boolean;
+          image?: boolean;
+          video?: boolean;
+          pdf?: boolean;
+        };
+      };
+      modalities?: {
+        input?: Array<"text" | "audio" | "image" | "video" | "pdf">;
+      };
+    }
+  >;
+  env?: string[];
+}
+
+export interface MirroredCredential {
+  providerId: string;
+  authType: string;
+  keyVersion: number;
+  updatedAt: string;
+}
+
+export interface NormalizedProvider {
+  providerId: string;
+  providerName: string;
+  connected: boolean;
+  authMode: "oauth" | "api_key" | "manual_env" | null;
+  oauthMethods: Array<{ index: number; type: "oauth" | "api"; label: string }>;
+  envVars: string[];
+  keyLikeEnvVars: string[];
+  primaryApiKeyEnvVar: string | null;
+  requiresAdditionalEnv: boolean;
+  envProfileStatus: {
+    configuredCount: number;
+    totalCount: number;
+    configuredKeys: string[];
+    missingKeys: string[];
+    ready: boolean;
+  };
+}
+
+export interface ProvidersResponse {
+  providers: {
+    all: Provider[];
+    connected: string[];
+  };
+  mirroredCredentials: MirroredCredential[];
+  normalizedProviders: NormalizedProvider[];
+}
+
+export interface SetProviderAuthInput {
+  type: "api" | "wellknown";
+  key: string;
+  token?: string;
+}
+
+export interface OAuthAuthorizeResponse {
+  url: string;
+  method: "auto" | "code";
+  instructions: string;
+}
+
+export interface OAuthCallbackInput {
+  method: number;
+  code?: string;
+}
+
+export interface ModelSelection {
+  providerID: string;
+  modelID: string;
+}
 import { parseSSEStream } from "$lib/sse";
 
 type FetchLike = (input: RequestInfo | URL, init?: RequestInit) => Promise<Response>;
 
 interface RequestOptions {
-  method?: "GET" | "POST" | "DELETE";
+  method?: "GET" | "POST" | "PUT" | "DELETE";
   body?: unknown;
   headers?: Record<string, string>;
   fetchImpl?: FetchLike;
@@ -211,6 +295,175 @@ export async function forceTeardownInstance(
   });
 }
 
+// Provider APIs
+export async function listProviders(fetchImpl?: FetchLike): Promise<ProvidersResponse> {
+  return request<ProvidersResponse>("/api/providers", { fetchImpl });
+}
+
+export async function setProviderAuth(
+  providerId: string,
+  input: SetProviderAuthInput,
+  fetchImpl?: FetchLike,
+): Promise<SuccessResponse> {
+  return request<SuccessResponse>(`/api/providers/${providerId}/auth`, {
+    method: "POST",
+    body: input,
+    fetchImpl,
+  });
+}
+
+export async function removeProviderAuth(
+  providerId: string,
+  fetchImpl?: FetchLike,
+): Promise<SuccessResponse> {
+  return request<SuccessResponse>(`/api/providers/${providerId}/auth`, {
+    method: "DELETE",
+    fetchImpl,
+  });
+}
+
+export async function authorizeProviderOAuth(
+  providerId: string,
+  method: number,
+  fetchImpl?: FetchLike,
+): Promise<OAuthAuthorizeResponse> {
+  return request<OAuthAuthorizeResponse>(`/api/providers/${providerId}/oauth/authorize`, {
+    method: "POST",
+    body: { method },
+    fetchImpl,
+  });
+}
+
+export async function callbackProviderOAuth(
+  providerId: string,
+  input: OAuthCallbackInput,
+  fetchImpl?: FetchLike,
+): Promise<SuccessResponse> {
+  return request<SuccessResponse>(`/api/providers/${providerId}/oauth/callback`, {
+    method: "POST",
+    body: input,
+    fetchImpl,
+  });
+}
+
+// Env profile APIs
+export interface EnvSchemaField {
+  key: string;
+  required: boolean;
+  inputKind: "text" | "secret" | "file_path";
+  placeholder?: string;
+  description?: string;
+}
+
+export interface EnvSchema {
+  providerId: string;
+  envSchema: EnvSchemaField[];
+}
+
+export interface EnvProfileValue {
+  key: string;
+  value: string | null;
+  configured: boolean;
+}
+
+export interface EnvProfile {
+  providerId: string;
+  values: EnvProfileValue[];
+}
+
+export interface SetEnvProfileInput {
+  values: Record<string, string>;
+}
+
+export interface UploadProviderEnvFileResponse {
+  path: string;
+}
+
+export async function getProviderEnvSchema(
+  providerId: string,
+  fetchImpl?: FetchLike,
+): Promise<EnvSchema> {
+  return request<EnvSchema>(`/api/providers/${providerId}/env-schema`, { fetchImpl });
+}
+
+export async function getProviderEnvProfile(
+  providerId: string,
+  fetchImpl?: FetchLike,
+): Promise<EnvProfile> {
+  return request<EnvProfile>(`/api/providers/${providerId}/env-profile`, { fetchImpl });
+}
+
+export async function setProviderEnvProfile(
+  providerId: string,
+  input: SetEnvProfileInput,
+  fetchImpl?: FetchLike,
+): Promise<SuccessResponse> {
+  return request<SuccessResponse>(`/api/providers/${providerId}/env-profile`, {
+    method: "PUT",
+    body: input,
+    fetchImpl,
+  });
+}
+
+export async function deleteProviderEnvProfile(
+  providerId: string,
+  fetchImpl?: FetchLike,
+): Promise<SuccessResponse> {
+  return request<SuccessResponse>(`/api/providers/${providerId}/env-profile`, {
+    method: "DELETE",
+    fetchImpl,
+  });
+}
+
+export async function uploadProviderEnvFile(
+  providerId: string,
+  envKey: string,
+  file: File,
+  fetchImpl?: FetchLike,
+): Promise<UploadProviderEnvFileResponse> {
+  const formData = new FormData();
+  formData.set("file", file);
+
+  const fetcher = fetchImpl ?? fetch;
+  const response = await fetcher(
+    `${resolveBaseUrl()}/api/providers/${providerId}/env-file/${encodeURIComponent(envKey)}`,
+    {
+      method: "POST",
+      body: formData,
+      credentials: "include",
+    },
+  );
+
+  if (!response.ok) {
+    const payload = (await response.json().catch(() => null)) as
+      | { error?: string }
+      | null;
+    throw new Error(payload?.error ?? `Request failed with status ${response.status}`);
+  }
+
+  return (await response.json()) as UploadProviderEnvFileResponse;
+}
+
+// Model selection APIs
+export async function getConversationModel(
+  conversationId: string,
+  fetchImpl?: FetchLike,
+): Promise<{ model: ModelSelection | null }> {
+  return request<{ model: ModelSelection | null }>(`/api/conversations/${conversationId}/model`, { fetchImpl });
+}
+
+export async function setConversationModel(
+  conversationId: string,
+  model: ModelSelection,
+  fetchImpl?: FetchLike,
+): Promise<{ success: boolean; model: ModelSelection }> {
+  return request<{ success: boolean; model: ModelSelection }>(`/api/conversations/${conversationId}/model`, {
+    method: "PUT",
+    body: model,
+    fetchImpl,
+  });
+}
+
 // Export as api object for convenience
 export const api = {
   listConversations,
@@ -249,6 +502,18 @@ export const api = {
   uploadFile,
   listAdminInstances,
   forceTeardownInstance,
+  listProviders,
+  setProviderAuth,
+  removeProviderAuth,
+  authorizeProviderOAuth,
+  callbackProviderOAuth,
+  getProviderEnvSchema,
+  getProviderEnvProfile,
+  setProviderEnvProfile,
+  deleteProviderEnvProfile,
+  uploadProviderEnvFile,
+  getConversationModel,
+  setConversationModel,
 };
 
 // Helper function for streaming messages with callbacks
@@ -268,6 +533,8 @@ export async function streamMessage(
 ): Promise<void> {
   const roleByMessageId = new Map<string, "user" | "assistant" | "system">();
   const textByMessageId = new Map<string, string>();
+  const reasoningByMessageId = new Map<string, string>();
+  const toolCallsByMessageId = new Map<string, Map<string, ToolCallView>>();
   const finishByMessageId = new Map<string, string | undefined>();
   let lastEmittedTitle: string | null = null;
 
@@ -279,6 +546,14 @@ export async function streamMessage(
   const shouldEmitAssistantMessage = (messageId: string): boolean => {
     const text = textByMessageId.get(messageId) ?? "";
     if (text.trim().length > 0) {
+      return true;
+    }
+    const reasoning = reasoningByMessageId.get(messageId) ?? "";
+    if (reasoning.trim().length > 0) {
+      return true;
+    }
+    const toolCalls = toolCallsByMessageId.get(messageId);
+    if (toolCalls && toolCalls.size > 0) {
       return true;
     }
     return isTerminalFinish(finishByMessageId.get(messageId));
@@ -294,8 +569,20 @@ export async function streamMessage(
       id: messageId,
       role,
       text: textByMessageId.get(messageId) ?? "",
+      reasoning: reasoningByMessageId.get(messageId) ?? "",
+      toolCalls: Array.from((toolCallsByMessageId.get(messageId) ?? new Map()).values()),
       finish: resolvedFinish,
     });
+  };
+
+  const upsertToolCall = (messageId: string, toolCall: ToolCallView) => {
+    const current = toolCallsByMessageId.get(messageId) ?? new Map<string, ToolCallView>();
+    const existing = current.get(toolCall.id);
+    current.set(toolCall.id, {
+      ...(existing ?? {}),
+      ...toolCall,
+    });
+    toolCallsByMessageId.set(messageId, current);
   };
 
   const getRequestId = (value: unknown): string | null => {
@@ -338,6 +625,9 @@ export async function streamMessage(
         if (!textByMessageId.has(messageId)) {
           textByMessageId.set(messageId, "");
         }
+        if (!toolCallsByMessageId.has(messageId)) {
+          toolCallsByMessageId.set(messageId, new Map<string, ToolCallView>());
+        }
         finishByMessageId.set(messageId, data.info?.finish);
 
         if (role === "assistant" || role === "system") {
@@ -354,18 +644,56 @@ export async function streamMessage(
             text?: string;
           };
         };
-        if (data.part?.type !== "text" || !data.part.messageID) {
+        if (!data.part?.messageID) {
           continue;
         }
 
         const messageId = data.part.messageID;
-        if (typeof data.delta === "string" && data.delta.length > 0) {
-          textByMessageId.set(
-            messageId,
-            `${textByMessageId.get(messageId) ?? ""}${data.delta}`,
-          );
-        } else if (typeof data.part.text === "string") {
-          textByMessageId.set(messageId, data.part.text);
+        if (data.part.type === "text") {
+          if (typeof data.delta === "string" && data.delta.length > 0) {
+            textByMessageId.set(
+              messageId,
+              `${textByMessageId.get(messageId) ?? ""}${data.delta}`,
+            );
+          } else if (typeof data.part.text === "string") {
+            textByMessageId.set(messageId, data.part.text);
+          }
+        } else if (data.part.type === "reasoning") {
+          if (typeof data.delta === "string" && data.delta.length > 0) {
+            reasoningByMessageId.set(
+              messageId,
+              `${reasoningByMessageId.get(messageId) ?? ""}${data.delta}`,
+            );
+          } else if (typeof data.part.text === "string") {
+            reasoningByMessageId.set(messageId, data.part.text);
+          }
+        } else if (data.part.type === "tool") {
+          const toolPart = data.part as {
+            id?: string;
+            callID?: string;
+            tool?: string;
+            state?: {
+              status?: "pending" | "running" | "completed" | "error";
+              input?: unknown;
+              output?: string;
+              error?: string;
+            };
+          };
+          const toolId = toolPart.callID ?? toolPart.id ?? `tool-${Date.now()}`;
+          const input =
+            toolPart.state?.input !== undefined
+              ? JSON.stringify(toolPart.state.input)
+              : undefined;
+          upsertToolCall(messageId, {
+            id: toolId,
+            name: toolPart.tool ?? "tool",
+            status: toolPart.state?.status ?? "running",
+            input,
+            output: toolPart.state?.output,
+            error: toolPart.state?.error,
+          });
+        } else {
+          continue;
         }
 
         const role = roleByMessageId.get(messageId);
@@ -416,6 +744,26 @@ export async function streamMessage(
         const requestId = getRequestId(envelope.data);
         if (requestId) {
           callbacks.onRequestResolved?.(requestId);
+        }
+      } else if (envelope.event === "command.executed") {
+        const data = envelope.data as {
+          name?: string;
+          arguments?: string;
+          messageID?: string;
+        };
+        if (!data.messageID || !data.name) {
+          continue;
+        }
+        const commandId = `cmd:${data.name}:${data.arguments ?? ""}`;
+        upsertToolCall(data.messageID, {
+          id: commandId,
+          name: data.name,
+          status: "executed",
+          input: data.arguments,
+        });
+        const role = roleByMessageId.get(data.messageID);
+        if ((role === "assistant" || role === "system") && shouldEmitAssistantMessage(data.messageID)) {
+          emitMessage(data.messageID, role);
         }
       } else if (envelope.event === "error") {
         const data = envelope.data as { message?: string };
