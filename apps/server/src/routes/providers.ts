@@ -171,7 +171,7 @@ export const providersRoute = new Elysia({ prefix: "/api/providers" })
     "/",
     async (context) => {
       const userId = await requireAuth(context);
-      const { client } = await opencodeManager.getOrSpawn(userId);
+      const { client } = await opencodeManager.getOrSpawnAnyForUser(userId);
 
       const [{ data: providers, error: providerError }, { data: auth, error: authError }] =
         await Promise.all([client.provider.list(), client.provider.auth()]);
@@ -243,7 +243,7 @@ export const providersRoute = new Elysia({ prefix: "/api/providers" })
     async (context) => {
       const userId = await requireAuth(context);
       const { providerId } = context.params;
-      const { client } = await opencodeManager.getOrSpawn(userId);
+      const { client } = await opencodeManager.getOrSpawnAnyForUser(userId);
       const { data: providers, error } = await client.provider.list();
       if (error || !providers) {
         throw new Error("Failed to fetch providers");
@@ -281,7 +281,7 @@ export const providersRoute = new Elysia({ prefix: "/api/providers" })
     async (context) => {
       const userId = await requireAuth(context);
       const { providerId } = context.params;
-      const { client } = await opencodeManager.getOrSpawn(userId);
+      const { client } = await opencodeManager.getOrSpawnAnyForUser(userId);
       const { data: providers, error } = await client.provider.list();
       if (error || !providers) {
         throw new Error("Failed to fetch providers");
@@ -349,7 +349,7 @@ export const providersRoute = new Elysia({ prefix: "/api/providers" })
       const userId = await requireAuth(context);
       const { providerId } = context.params;
       const { values } = context.body;
-      const { client } = await opencodeManager.getOrSpawn(userId);
+      const { client } = await opencodeManager.getOrSpawnAnyForUser(userId);
       const { data: providers, error } = await client.provider.list();
       if (error || !providers) {
         throw new Error("Failed to fetch providers");
@@ -419,7 +419,7 @@ export const providersRoute = new Elysia({ prefix: "/api/providers" })
           });
       }
 
-      await opencodeManager.teardown(userId);
+      await opencodeManager.teardownAllForUser(userId);
 
       return { success: true };
     },
@@ -432,7 +432,7 @@ export const providersRoute = new Elysia({ prefix: "/api/providers" })
         summary: "Save provider env profile",
         tags: ["Providers"],
         description:
-          "Save encrypted provider environment values for the authenticated user and restart their OpenCode instance",
+          "Save encrypted provider environment values for the authenticated user and restart their OpenCode instances",
       },
     },
   )
@@ -442,7 +442,7 @@ export const providersRoute = new Elysia({ prefix: "/api/providers" })
       const userId = await requireAuth(context);
       const { providerId, envKey } = context.params;
       const { file } = context.body;
-      const { client } = await opencodeManager.getOrSpawn(userId);
+      const { client } = await opencodeManager.getOrSpawnAnyForUser(userId);
       const { data: providers, error } = await client.provider.list();
       if (error || !providers) {
         throw new Error("Failed to fetch providers");
@@ -474,7 +474,7 @@ export const providersRoute = new Elysia({ prefix: "/api/providers" })
       }
 
       const { env } = await import("@kepler-chat/env/server");
-      const { join, resolve, relative } = await import("path");
+      const { join, resolve } = await import("path");
       const { mkdir, writeFile } = await import("fs/promises");
       const sanitizeSegment = (value: string) => value.replace(/[^a-zA-Z0-9._-]/g, "_");
       const safeProviderId = sanitizeSegment(providerId);
@@ -493,8 +493,9 @@ export const providersRoute = new Elysia({ prefix: "/api/providers" })
       const bytes = new Uint8Array(await file.arrayBuffer());
       await writeFile(filePath, bytes);
 
-      const userBaseDir = resolve(env.KEPLER_SESSIONS_PATH, userId);
-      return { path: relative(userBaseDir, filePath) };
+      // Return absolute path — the OpenCode process runs with cwd set to
+      // the conversation directory, so relative paths would resolve incorrectly.
+      return { path: filePath };
     },
     {
       params: t.Object({
@@ -527,7 +528,7 @@ export const providersRoute = new Elysia({ prefix: "/api/providers" })
           ),
         );
 
-      await opencodeManager.teardown(userId);
+      await opencodeManager.teardownAllForUser(userId);
 
       return { success: true };
     },
@@ -539,7 +540,7 @@ export const providersRoute = new Elysia({ prefix: "/api/providers" })
         summary: "Delete provider env profile",
         tags: ["Providers"],
         description:
-          "Delete stored provider environment profile for the authenticated user and restart their OpenCode instance",
+          "Delete stored provider environment profile for the authenticated user and restart their OpenCode instances",
       },
     },
   )
@@ -550,14 +551,23 @@ export const providersRoute = new Elysia({ prefix: "/api/providers" })
       const { providerId } = context.params;
       const payload = context.body as OpencodeAuth;
 
-      const { client } = await opencodeManager.getOrSpawn(userId);
-      const { data, error } = await client.auth.set({
-        providerID: providerId,
-        auth: payload,
-      });
+      // Propagate auth.set to every running instance so each isolated
+      // XDG directory gets the new credential written.
+      const allInstances = await opencodeManager.getAllForUser(userId);
+      if (allInstances.length === 0) {
+        // No running instances — spawn one to write the auth
+        const { client } = await opencodeManager.getOrSpawnAnyForUser(userId);
+        allInstances.push({ client } as typeof allInstances[0]);
+      }
 
-      if (error || !data) {
-        throw new Error("Failed to set provider auth");
+      for (const inst of allInstances) {
+        const { data, error } = await inst.client.auth.set({
+          providerID: providerId,
+          auth: payload,
+        });
+        if (error || !data) {
+          throw new Error("Failed to set provider auth");
+        }
       }
 
       const encrypted = encryptProviderPayload(payload);
@@ -604,14 +614,21 @@ export const providersRoute = new Elysia({ prefix: "/api/providers" })
     async (context) => {
       const userId = await requireAuth(context);
       const { providerId } = context.params;
-      const { client } = await opencodeManager.getOrSpawn(userId);
+      // Propagate auth.remove to every running instance so each isolated
+      // XDG directory has the credential removed.
+      const allInstances = await opencodeManager.getAllForUser(userId);
+      if (allInstances.length === 0) {
+        const { client } = await opencodeManager.getOrSpawnAnyForUser(userId);
+        allInstances.push({ client } as typeof allInstances[0]);
+      }
 
-      const { data, error } = await client.auth.remove({
-        providerID: providerId,
-      });
-
-      if (error || !data) {
-        throw new Error("Failed to remove provider auth");
+      for (const inst of allInstances) {
+        const { data, error } = await inst.client.auth.remove({
+          providerID: providerId,
+        });
+        if (error || !data) {
+          throw new Error("Failed to remove provider auth");
+        }
       }
 
       await db
@@ -643,7 +660,7 @@ export const providersRoute = new Elysia({ prefix: "/api/providers" })
       const userId = await requireAuth(context);
       const { providerId } = context.params;
       const { method } = context.body;
-      const { client } = await opencodeManager.getOrSpawn(userId);
+      const { client } = await opencodeManager.getOrSpawnAnyForUser(userId);
 
       const { data, error } = await client.provider.oauth.authorize({
         providerID: providerId,
@@ -674,7 +691,7 @@ export const providersRoute = new Elysia({ prefix: "/api/providers" })
       const userId = await requireAuth(context);
       const { providerId } = context.params;
       const payload = context.body;
-      const { client } = await opencodeManager.getOrSpawn(userId);
+      const { client } = await opencodeManager.getOrSpawnAnyForUser(userId);
 
       const { data, error } = await client.provider.oauth.callback({
         providerID: providerId,

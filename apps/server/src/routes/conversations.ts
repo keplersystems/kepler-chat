@@ -5,8 +5,12 @@ import { eq } from "drizzle-orm";
 import { opencodeManager } from "../services/opencode";
 import { requireAuth } from "../middleware/auth";
 import { generateId } from "../lib/id";
-import { env } from "@kepler-chat/env/server";
-import { resolve } from "path";
+import {
+  getConversationPlaygroundPath,
+  getConversationRoot,
+  provisionConversationDirectories,
+} from "../lib/conversation-paths";
+import { rm } from "node:fs/promises";
 
 export const conversationsRoute = new Elysia({ prefix: "/api/conversations" })
   .get("/", async (context) => {
@@ -31,27 +35,46 @@ export const conversationsRoute = new Elysia({ prefix: "/api/conversations" })
       const userId = await requireAuth(context);
       const { title } = context.body;
 
-      const { client } = await opencodeManager.getOrSpawn(userId);
-      const userPath = resolve(env.KEPLER_SESSIONS_PATH, userId);
-
-      const { data: session, error } = await client.session.create({
-        title,
-        directory: `${userPath}/playground`,
-      });
-
-      if (error || !session) {
-        throw new Error("Failed to create session");
-      }
-
       const conversationId = generateId();
+
+      // Insert conversation row first — opencode_conversation_instance has an FK
+      // to conversation.id, so the row must exist before getOrSpawn.
       await db.insert(conversation).values({
         id: conversationId,
         user_id: userId,
-        opencode_session_id: session.id,
-        title: session.title,
+        opencode_session_id: "__pending__",
+        title,
       });
 
-      return { id: conversationId, session };
+      try {
+        await provisionConversationDirectories(userId, conversationId);
+        const playgroundPath = getConversationPlaygroundPath(userId, conversationId);
+
+        const { client } = await opencodeManager.getOrSpawn(userId, conversationId);
+
+        const { data: session, error } = await client.session.create({
+          title,
+          directory: playgroundPath,
+        });
+
+        if (error || !session) {
+          throw new Error("Failed to create session");
+        }
+
+        await db
+          .update(conversation)
+          .set({
+            opencode_session_id: session.id,
+            title: session.title,
+          })
+          .where(eq(conversation.id, conversationId));
+
+        return { id: conversationId, session };
+      } catch (err) {
+        // Clean up the conversation row if spawn/session creation fails
+        await db.delete(conversation).where(eq(conversation.id, conversationId));
+        throw err;
+      }
     },
     {
       body: t.Object({
@@ -101,8 +124,10 @@ export const conversationsRoute = new Elysia({ prefix: "/api/conversations" })
       throw new Error("Conversation not found");
     }
 
-    const { client } = await opencodeManager.getOrSpawn(userId);
-    await client.session.delete({ sessionID: conv.opencode_session_id });
+    await opencodeManager.teardown(id);
+
+    const conversationRoot = getConversationRoot(userId, id);
+    await rm(conversationRoot, { recursive: true, force: true });
 
     await db.delete(conversation).where(eq(conversation.id, id));
 
@@ -114,6 +139,6 @@ export const conversationsRoute = new Elysia({ prefix: "/api/conversations" })
     detail: {
       summary: "Delete conversation",
       tags: ["Conversations"],
-      description: "Delete a conversation and its OpenCode session",
+      description: "Delete a conversation, its OpenCode session, instance, and files",
     },
   });

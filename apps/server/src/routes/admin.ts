@@ -15,12 +15,13 @@ export const adminRoute = new Elysia({ prefix: "/api/admin" })
         return { error: "Forbidden" };
       }
 
-      const instances = await db.query.opencodeInstance.findMany({
+      const instances = await db.query.opencodeConversationInstance.findMany({
         orderBy: (fields, { desc }) => [desc(fields.last_active_at)],
       });
 
       return {
         instances: instances.map((instance) => ({
+          conversationId: instance.conversation_id,
           userId: instance.user_id,
           serverUrl: instance.server_url,
           port: instance.port,
@@ -36,12 +37,12 @@ export const adminRoute = new Elysia({ prefix: "/api/admin" })
       detail: {
         summary: "List OpenCode instances",
         tags: ["Admin"],
-        description: "List all OpenCode instances and lifecycle metadata",
+        description: "List all OpenCode conversation instances and lifecycle metadata",
       },
     },
   )
   .delete(
-    "/instances/:userId",
+    "/instances/:conversationId",
     async (context): Promise<SuccessResponse | { error: string }> => {
       const requesterId = await requireAuth(context);
       if (!isAdminUser(requesterId)) {
@@ -49,9 +50,9 @@ export const adminRoute = new Elysia({ prefix: "/api/admin" })
         return { error: "Forbidden" };
       }
 
-      const { userId } = context.params;
-      const instance = await db.query.opencodeInstance.findFirst({
-        where: (fields, { eq }) => eq(fields.user_id, userId),
+      const { conversationId } = context.params;
+      const instance = await db.query.opencodeConversationInstance.findFirst({
+        where: (fields, { eq }) => eq(fields.conversation_id, conversationId),
       });
 
       if (!instance) {
@@ -59,17 +60,17 @@ export const adminRoute = new Elysia({ prefix: "/api/admin" })
         return { error: "Instance not found" };
       }
 
-      await opencodeManager.teardown(userId);
+      await opencodeManager.teardown(conversationId);
       return { success: true };
     },
     {
       params: t.Object({
-        userId: t.String({ minLength: 1 }),
+        conversationId: t.String({ minLength: 1 }),
       }),
       detail: {
         summary: "Force teardown instance",
         tags: ["Admin"],
-        description: "Stops and marks a user's OpenCode instance as stopped",
+        description: "Stops and marks a conversation's OpenCode instance as stopped",
       },
     },
   );

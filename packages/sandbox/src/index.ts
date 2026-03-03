@@ -2,7 +2,6 @@ import {
   SandboxManager,
   type SandboxRuntimeConfig,
 } from "@anthropic-ai/sandbox-runtime";
-import { env } from "@kepler-chat/env/server";
 import { resolve } from "path";
 
 const NETWORK_ALLOWLIST = [
@@ -19,7 +18,7 @@ export function getNetworkAllowlist(): readonly string[] {
 
 /**
  * Creates the base sandbox configuration.
- * User-specific allowWrite paths are provided at command wrap time.
+ * Conversation-specific allowWrite paths are provided at command wrap time.
  */
 export function createSandboxBaseConfig(): SandboxRuntimeConfig {
   return {
@@ -45,23 +44,6 @@ export function createSandboxBaseConfig(): SandboxRuntimeConfig {
       allowedDomains: undefined as unknown as string[],
       deniedDomains: [],
       allowLocalBinding: true,
-    },
-  };
-}
-
-/**
- * Creates sandbox configuration for a specific user.
- * Isolates filesystem access to user's session folder only.
- */
-export function createSandboxConfig(userId: string): SandboxRuntimeConfig {
-  const userPath = resolve(env.KEPLER_SESSIONS_PATH, userId);
-  const baseConfig = createSandboxBaseConfig();
-
-  return {
-    ...baseConfig,
-    filesystem: {
-      ...baseConfig.filesystem,
-      allowWrite: [userPath],
     },
   };
 }
@@ -94,29 +76,18 @@ export async function ensureSandboxInitialized(): Promise<void> {
 }
 
 /**
- * Wraps a command with sandbox restrictions for the given user.
+ * Wraps a command with sandbox restrictions scoped to a conversation root.
  */
-export async function wrapCommandForUser(
+export async function wrapCommandForConversation(
   command: string,
-  userId: string,
+  conversationRootPath: string,
 ): Promise<string> {
   await ensureSandboxInitialized();
-  const userPath = resolve(env.KEPLER_SESSIONS_PATH, userId);
   return SandboxManager.wrapWithSandbox(command, undefined, {
     filesystem: {
-      allowWrite: [userPath],
+      allowWrite: [conversationRootPath],
     },
   });
-}
-
-/**
- * Wraps a command with sandbox restrictions for the given user.
- */
-export async function wrapWithSandbox(
-  command: string,
-  userId: string,
-): Promise<string> {
-  return wrapCommandForUser(command, userId);
 }
 
 export { SandboxManager };

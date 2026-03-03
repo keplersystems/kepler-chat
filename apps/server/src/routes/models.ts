@@ -76,7 +76,7 @@ export const modelsRoute = new Elysia({ prefix: "/api/conversations" })
         return { error: "Conversation not found" };
       }
 
-      const { client } = await opencodeManager.getOrSpawn(userId);
+      const { client } = await opencodeManager.getOrSpawn(userId, id);
       const { data: providers, error } = await client.provider.list();
       if (error || !providers) {
         throw new Error("Failed to fetch provider catalog");

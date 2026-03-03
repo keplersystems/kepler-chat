@@ -31,7 +31,7 @@ export const requestsRoute = new Elysia({ prefix: "/api/conversations" })
         return { error: "Conversation not found" };
       }
 
-      const { client } = await opencodeManager.getOrSpawn(userId);
+      const { client } = await opencodeManager.getOrSpawn(userId, id);
       const [{ data: permissions, error: permError }, { data: questions, error: questionError }] =
         await Promise.all([client.permission.list(), client.question.list()]);
 
@@ -82,7 +82,7 @@ export const requestsRoute = new Elysia({ prefix: "/api/conversations" })
         return { error: "Conversation not found" };
       }
 
-      const { client } = await opencodeManager.getOrSpawn(userId);
+      const { client } = await opencodeManager.getOrSpawn(userId, id);
       const { data: permissions, error: permError } = await client.permission.list();
 
       if (permError || !permissions) {
@@ -145,7 +145,7 @@ export const requestsRoute = new Elysia({ prefix: "/api/conversations" })
         return { error: "Conversation not found" };
       }
 
-      const { client } = await opencodeManager.getOrSpawn(userId);
+      const { client } = await opencodeManager.getOrSpawn(userId, id);
       const { data: questions, error: questionError } =
         await client.question.list();
 
@@ -209,7 +209,7 @@ export const requestsRoute = new Elysia({ prefix: "/api/conversations" })
         return { error: "Conversation not found" };
       }
 
-      const { client } = await opencodeManager.getOrSpawn(userId);
+      const { client } = await opencodeManager.getOrSpawn(userId, id);
       const { data: questions, error: questionError } =
         await client.question.list();
 

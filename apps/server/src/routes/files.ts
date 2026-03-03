@@ -5,20 +5,28 @@ import type {
   UploadFileResponse,
 } from "@kepler-chat/contracts";
 import {
-  ensureUserFileDirs,
-  getUserInputPath,
-  getUserOutputPath,
   listFilesRecursive,
   resolveAvailableFilePath,
   resolveSafeFilePath,
   statOrNull,
 } from "../lib/files";
+import {
+  getConversationInputPath,
+  getConversationOutputPath,
+  provisionConversationDirectories,
+} from "../lib/conversation-paths";
 import { requireAuth } from "../middleware/auth";
 import { requireConversationOwnership } from "../lib/conversation";
 import { basename } from "node:path";
 
-function getScopePath(userId: string, scope: FileScope): string {
-  return scope === "input" ? getUserInputPath(userId) : getUserOutputPath(userId);
+function getConversationScopePath(
+  userId: string,
+  conversationId: string,
+  scope: FileScope,
+): string {
+  return scope === "input"
+    ? getConversationInputPath(userId, conversationId)
+    : getConversationOutputPath(userId, conversationId);
 }
 
 export const filesRoute = new Elysia({ prefix: "/api/conversations" })
@@ -35,13 +43,13 @@ export const filesRoute = new Elysia({ prefix: "/api/conversations" })
         return { error: "Conversation not found" };
       }
 
-      await ensureUserFileDirs(userId);
+      await provisionConversationDirectories(userId, id);
       if (!(file instanceof File)) {
         context.set.status = 400;
         return { error: "Missing file upload" };
       }
 
-      const inputPath = getUserInputPath(userId);
+      const inputPath = getConversationInputPath(userId, id);
       const { absolutePath, relativePath } = await resolveAvailableFilePath(
         inputPath,
         file.name,
@@ -68,7 +76,7 @@ export const filesRoute = new Elysia({ prefix: "/api/conversations" })
         summary: "Upload file",
         tags: ["Files"],
         description:
-          "Upload a file to the authenticated user's conversation input directory",
+          "Upload a file to the conversation's input directory",
       },
     },
   )
@@ -85,8 +93,8 @@ export const filesRoute = new Elysia({ prefix: "/api/conversations" })
         return { error: "Conversation not found" };
       }
 
-      await ensureUserFileDirs(userId);
-      const outputPath = getUserOutputPath(userId);
+      await provisionConversationDirectories(userId, id);
+      const outputPath = getConversationOutputPath(userId, id);
 
       let startPath = outputPath;
       if (prefix) {
@@ -122,7 +130,7 @@ export const filesRoute = new Elysia({ prefix: "/api/conversations" })
         summary: "List output files",
         tags: ["Files"],
         description:
-          "Recursively list files under the authenticated user's output directory",
+          "Recursively list files under the conversation's output directory",
       },
     },
   )
@@ -146,7 +154,7 @@ export const filesRoute = new Elysia({ prefix: "/api/conversations" })
       }
 
       const fileScope: FileScope = scope ?? "output";
-      const basePath = getScopePath(userId, fileScope);
+      const basePath = getConversationScopePath(userId, id, fileScope);
 
       let absolutePath: string;
       try {

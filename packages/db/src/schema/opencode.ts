@@ -9,17 +9,20 @@ import {
 } from "drizzle-orm/sqlite-core";
 import { user } from "./auth";
 
-export const opencodeInstance = sqliteTable(
-  "opencode_instance",
+export const opencodeConversationInstance = sqliteTable(
+  "opencode_conversation_instance",
   {
+    conversation_id: text("conversation_id").primaryKey(),
     user_id: text("user_id")
-      .primaryKey()
+      .notNull()
       .references(() => user.id, { onDelete: "cascade" }),
     server_url: text("server_url").notNull(),
     port: integer("port").notNull(),
     pid: integer("pid"),
     spawned_at: integer("spawned_at", { mode: "timestamp_ms" }).notNull(),
-    last_active_at: integer("last_active_at", { mode: "timestamp_ms" }).notNull(),
+    last_active_at: integer("last_active_at", {
+      mode: "timestamp_ms",
+    }).notNull(),
     status: text("status").notNull(),
     error: text("error"),
     created_at: integer("created_at", { mode: "timestamp_ms" })
@@ -30,6 +33,9 @@ export const opencodeInstance = sqliteTable(
       .$onUpdate(() => new Date())
       .notNull(),
   },
+  (table) => [
+    index("opencode_conv_instance_user_idx").on(table.user_id),
+  ],
 );
 
 export const conversation = sqliteTable(
@@ -133,22 +139,28 @@ export const providerEnvProfile = sqliteTable(
   ],
 );
 
-export const opencodeInstanceRelations = relations(opencodeInstance, ({ one, many }) => ({
-  user: one(user, {
-    fields: [opencodeInstance.user_id],
-    references: [user.id],
+export const opencodeConversationInstanceRelations = relations(
+  opencodeConversationInstance,
+  ({ one }) => ({
+    user: one(user, {
+      fields: [opencodeConversationInstance.user_id],
+      references: [user.id],
+    }),
+    conversation: one(conversation, {
+      fields: [opencodeConversationInstance.conversation_id],
+      references: [conversation.id],
+    }),
   }),
-  conversations: many(conversation),
-}));
+);
 
 export const conversationRelations = relations(conversation, ({ one }) => ({
   user: one(user, {
     fields: [conversation.user_id],
     references: [user.id],
   }),
-  instance: one(opencodeInstance, {
-    fields: [conversation.user_id],
-    references: [opencodeInstance.user_id],
+  instance: one(opencodeConversationInstance, {
+    fields: [conversation.id],
+    references: [opencodeConversationInstance.conversation_id],
   }),
 }));
 

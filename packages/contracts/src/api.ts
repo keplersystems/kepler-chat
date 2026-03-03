@@ -81,6 +81,7 @@ export interface ListOutputFilesResponse {
 export type FileScope = "input" | "output";
 
 export interface AdminInstanceDTO {
+  conversationId: string;
   userId: string;
   serverUrl: string;
   port: number;

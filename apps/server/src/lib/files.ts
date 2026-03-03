@@ -1,6 +1,5 @@
-import { mkdir, readdir, stat } from "node:fs/promises";
+import { readdir, stat } from "node:fs/promises";
 import { basename, normalize, relative, resolve, sep } from "node:path";
-import { env } from "@kepler-chat/env/server";
 import type { FileEntryDTO } from "@kepler-chat/contracts";
 
 const INVALID_FILENAME = /[<>:"/\\|?*\x00-\x1f]/g;
@@ -15,18 +14,6 @@ function assertSubpath(basePath: string, targetPath: string): void {
   }
 }
 
-export function getUserBasePath(userId: string): string {
-  return resolve(env.KEPLER_SESSIONS_PATH, userId);
-}
-
-export function getUserInputPath(userId: string): string {
-  return resolve(getUserBasePath(userId), "input");
-}
-
-export function getUserOutputPath(userId: string): string {
-  return resolve(getUserBasePath(userId), "output");
-}
-
 export function sanitizeFilename(raw: string): string {
   const trimmed = raw.trim();
   if (!trimmed) {
@@ -38,13 +25,6 @@ export function sanitizeFilename(raw: string): string {
     throw new Error("Invalid filename");
   }
   return fileName;
-}
-
-export async function ensureUserFileDirs(userId: string): Promise<void> {
-  await Promise.all([
-    mkdir(getUserInputPath(userId), { recursive: true }),
-    mkdir(getUserOutputPath(userId), { recursive: true }),
-  ]);
 }
 
 export function resolveSafeFilePath(

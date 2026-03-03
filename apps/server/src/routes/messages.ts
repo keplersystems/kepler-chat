@@ -7,7 +7,8 @@ import { requireAuth } from "../middleware/auth";
 import type { Event, FilePartInput, TextPartInput } from "@opencode-ai/sdk/v2";
 import { basename } from "node:path";
 import { pathToFileURL } from "node:url";
-import { getUserInputPath, resolveSafeFilePath, statOrNull } from "../lib/files";
+import { resolveSafeFilePath, statOrNull } from "../lib/files";
+import { getConversationInputPath } from "../lib/conversation-paths";
 
 function formatSSE(id: string, event: string, data: string): string {
   return `id: ${id}\nevent: ${event}\ndata: ${data}\n\n`;
@@ -125,7 +126,7 @@ export const messagesRoute = new Elysia({ prefix: "/api/conversations" })
         throw new Error("Conversation not found");
       }
 
-      const { client } = await opencodeManager.getOrSpawn(userId);
+      const { client } = await opencodeManager.getOrSpawn(userId, id);
       const { data: messages, error } = await client.session.messages({
         sessionID: conv.opencode_session_id,
       });
@@ -163,7 +164,7 @@ export const messagesRoute = new Elysia({ prefix: "/api/conversations" })
         throw new Error("Conversation not found");
       }
 
-      const { client } = await opencodeManager.getOrSpawn(userId);
+      const { client } = await opencodeManager.getOrSpawn(userId, id);
       const { data: providerCatalog, error: providerCatalogError } =
         await client.provider.list();
       if (providerCatalogError || !providerCatalog) {
@@ -192,7 +193,7 @@ export const messagesRoute = new Elysia({ prefix: "/api/conversations" })
         return { error: "Message text or attachment is required" };
       }
 
-      const inputBasePath = getUserInputPath(userId);
+      const inputBasePath = getConversationInputPath(userId, id);
       const fileParts: FilePartInput[] = [];
       for (const attachment of attachments) {
         let absolutePath: string;

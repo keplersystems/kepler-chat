@@ -286,10 +286,10 @@ export async function listAdminInstances(fetchImpl?: FetchLike): Promise<ListIns
 }
 
 export async function forceTeardownInstance(
-  userId: string,
+  conversationId: string,
   fetchImpl?: FetchLike,
 ): Promise<SuccessResponse> {
-  return request<SuccessResponse>(`/api/admin/instances/${userId}`, {
+  return request<SuccessResponse>(`/api/admin/instances/${conversationId}`, {
     method: "DELETE",
     fetchImpl,
   });
