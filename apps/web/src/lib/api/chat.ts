@@ -2,7 +2,6 @@ import type {
   ConversationDTO,
   CreateConversationInput,
   FileScope,
-  ListInstancesResponse,
   ListOutputFilesResponse,
   PendingRequestDTO,
   PermissionRequestReplyInput,
@@ -95,7 +94,7 @@ export interface ModelSelection {
   providerID: string;
   modelID: string;
 }
-import { parseSSEStream } from "$lib/sse";
+import { parseSSEStream } from "../sse";
 
 type FetchLike = (input: RequestInfo | URL, init?: RequestInit) => Promise<Response>;
 
@@ -279,20 +278,6 @@ export async function* sendMessageStream(
   }
 
   yield* parseSSEStream(response.body);
-}
-
-export async function listAdminInstances(fetchImpl?: FetchLike): Promise<ListInstancesResponse> {
-  return request<ListInstancesResponse>("/api/admin/instances", { fetchImpl });
-}
-
-export async function forceTeardownInstance(
-  conversationId: string,
-  fetchImpl?: FetchLike,
-): Promise<SuccessResponse> {
-  return request<SuccessResponse>(`/api/admin/instances/${conversationId}`, {
-    method: "DELETE",
-    fetchImpl,
-  });
 }
 
 // Provider APIs
@@ -500,8 +485,6 @@ export const api = {
     return response.blob();
   },
   uploadFile,
-  listAdminInstances,
-  forceTeardownInstance,
   listProviders,
   setProviderAuth,
   removeProviderAuth,

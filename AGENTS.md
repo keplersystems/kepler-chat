@@ -1,6 +1,6 @@
 # Kepler Chat
 
-Multi-user LLM chat application using OpenCode as the agent backend with per-user sandboxing.
+Single-user LLM chat application using one always-on OpenCode server as the agent backend.
 
 ## Stack
 
@@ -9,13 +9,13 @@ Multi-user LLM chat application using OpenCode as the agent backend with per-use
 - **Database**: SQLite + Drizzle ORM
 - **Agent**: OpenCode SDK
 - **Sandboxing**: @anthropic-ai/sandbox-runtime
-- **Auth**: Better-Auth
+- **Auth**: Shared passcode cookie
 
 ## Architecture
 
-- One sandboxed OpenCode instance per user (not per conversation)
-- On-demand spawning with 30-min idle timeout
-- Path-based filesystem isolation
+- One sandboxed OpenCode server for the application
+- Per-conversation directory isolation through the OpenCode SDK directory option
+- Server starts with the backend and stays running until backend shutdown
 - SSE streaming for real-time responses
 
 See `SPEC.md` for full architecture documentation.

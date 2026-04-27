@@ -15,14 +15,10 @@
   },
   "dependencies": {
     "@ark-ui/svelte": "^5.16.0",
-    "@kepler-chat/auth": "workspace:*",
     "@kepler-chat/contracts": "workspace:*",
     "@kepler-chat/env": "workspace:*",
-    "@libsql/client": "catalog:",
     "@tanstack/svelte-form": "^1.19.2",
-    "better-auth": "catalog:",
     "dotenv": "catalog:",
-    "libsql": "catalog:",
     "zod": "catalog:"
   },
   "devDependencies": {

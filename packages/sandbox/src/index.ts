@@ -2,24 +2,7 @@ import {
   SandboxManager,
   type SandboxRuntimeConfig,
 } from "@anthropic-ai/sandbox-runtime";
-import { resolve } from "path";
 
-const NETWORK_ALLOWLIST = [
-  "api.openai.com",
-  "api.anthropic.com",
-  "*.googleapis.com",
-  "generativelanguage.googleapis.com",
-  "mcp.exa.ai",
-] as const;
-
-export function getNetworkAllowlist(): readonly string[] {
-  return NETWORK_ALLOWLIST;
-}
-
-/**
- * Creates the base sandbox configuration.
- * Conversation-specific allowWrite paths are provided at command wrap time.
- */
 export function createSandboxBaseConfig(): SandboxRuntimeConfig {
   return {
     filesystem: {
@@ -76,16 +59,18 @@ export async function ensureSandboxInitialized(): Promise<void> {
 }
 
 /**
- * Wraps a command with sandbox restrictions scoped to a conversation root.
+ * Wraps a command with sandbox restrictions scoped to the sessions root.
  */
-export async function wrapCommandForConversation(
+export async function wrapCommandForSessionsRoot(
   command: string,
-  conversationRootPath: string,
+  sessionsRootPath: string,
 ): Promise<string> {
   await ensureSandboxInitialized();
   return SandboxManager.wrapWithSandbox(command, undefined, {
     filesystem: {
-      allowWrite: [conversationRootPath],
+      denyRead: [],
+      allowWrite: [sessionsRootPath],
+      denyWrite: [],
     },
   });
 }

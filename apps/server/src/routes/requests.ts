@@ -1,6 +1,6 @@
 import { Elysia, t } from "elysia";
 import { db } from "@kepler-chat/db";
-import { opencodeManager } from "../services/opencode";
+import { opencodeServer } from "../services/opencode";
 import { requireAuth } from "../middleware/auth";
 import type { PermissionRequest, QuestionRequest } from "@opencode-ai/sdk/v2";
 
@@ -18,12 +18,11 @@ export const requestsRoute = new Elysia({ prefix: "/api/conversations" })
   .get(
     "/:id/requests",
     async (context) => {
-      const userId = await requireAuth(context);
+      requireAuth(context);
       const { id } = context.params;
 
       const conv = await db.query.conversation.findFirst({
-        where: (fields, { and, eq }) =>
-          and(eq(fields.id, id), eq(fields.user_id, userId)),
+        where: (fields, { eq }) => eq(fields.id, id),
       });
 
       if (!conv) {
@@ -31,7 +30,7 @@ export const requestsRoute = new Elysia({ prefix: "/api/conversations" })
         return { error: "Conversation not found" };
       }
 
-      const { client } = await opencodeManager.getOrSpawn(userId, id);
+      const { client } = await opencodeServer.conversationClient(id);
       const [{ data: permissions, error: permError }, { data: questions, error: questionError }] =
         await Promise.all([client.permission.list(), client.question.list()]);
 
@@ -68,13 +67,12 @@ export const requestsRoute = new Elysia({ prefix: "/api/conversations" })
   .post(
     "/:id/permissions/:requestId/reply",
     async (context) => {
-      const userId = await requireAuth(context);
+      requireAuth(context);
       const { id, requestId } = context.params;
       const { reply, message } = context.body;
 
       const conv = await db.query.conversation.findFirst({
-        where: (fields, { and, eq }) =>
-          and(eq(fields.id, id), eq(fields.user_id, userId)),
+        where: (fields, { eq }) => eq(fields.id, id),
       });
 
       if (!conv) {
@@ -82,7 +80,7 @@ export const requestsRoute = new Elysia({ prefix: "/api/conversations" })
         return { error: "Conversation not found" };
       }
 
-      const { client } = await opencodeManager.getOrSpawn(userId, id);
+      const { client } = await opencodeServer.conversationClient(id);
       const { data: permissions, error: permError } = await client.permission.list();
 
       if (permError || !permissions) {
@@ -131,13 +129,12 @@ export const requestsRoute = new Elysia({ prefix: "/api/conversations" })
   .post(
     "/:id/questions/:requestId/reply",
     async (context) => {
-      const userId = await requireAuth(context);
+      requireAuth(context);
       const { id, requestId } = context.params;
       const { answers } = context.body;
 
       const conv = await db.query.conversation.findFirst({
-        where: (fields, { and, eq }) =>
-          and(eq(fields.id, id), eq(fields.user_id, userId)),
+        where: (fields, { eq }) => eq(fields.id, id),
       });
 
       if (!conv) {
@@ -145,7 +142,7 @@ export const requestsRoute = new Elysia({ prefix: "/api/conversations" })
         return { error: "Conversation not found" };
       }
 
-      const { client } = await opencodeManager.getOrSpawn(userId, id);
+      const { client } = await opencodeServer.conversationClient(id);
       const { data: questions, error: questionError } =
         await client.question.list();
 
@@ -196,12 +193,11 @@ export const requestsRoute = new Elysia({ prefix: "/api/conversations" })
   .post(
     "/:id/questions/:requestId/reject",
     async (context) => {
-      const userId = await requireAuth(context);
+      requireAuth(context);
       const { id, requestId } = context.params;
 
       const conv = await db.query.conversation.findFirst({
-        where: (fields, { and, eq }) =>
-          and(eq(fields.id, id), eq(fields.user_id, userId)),
+        where: (fields, { eq }) => eq(fields.id, id),
       });
 
       if (!conv) {
@@ -209,7 +205,7 @@ export const requestsRoute = new Elysia({ prefix: "/api/conversations" })
         return { error: "Conversation not found" };
       }
 
-      const { client } = await opencodeManager.getOrSpawn(userId, id);
+      const { client } = await opencodeServer.conversationClient(id);
       const { data: questions, error: questionError } =
         await client.question.list();
 

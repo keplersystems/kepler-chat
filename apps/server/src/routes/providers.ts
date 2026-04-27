@@ -4,8 +4,8 @@ import {
   providerCredential,
   providerEnvProfile,
 } from "@kepler-chat/db/schema/opencode";
-import { and, eq } from "drizzle-orm";
-import { opencodeManager } from "../services/opencode";
+import { eq } from "drizzle-orm";
+import { opencodeServer } from "../services/opencode";
 import { requireAuth } from "../middleware/auth";
 import {
   decryptProviderPayload,
@@ -92,7 +92,7 @@ function buildProviderEnvSchema(envVars: string[]): ProviderEnvFieldSchema[] {
 
     const description =
       inputKind === "file_path"
-        ? "Filesystem path to credential/config file available to this user's sandbox"
+        ? "Filesystem path to credential/config file available to OpenCode"
         : inputKind === "secret"
           ? "Sensitive value; encrypted at rest"
           : "Provider configuration value";
@@ -170,8 +170,8 @@ export const providersRoute = new Elysia({ prefix: "/api/providers" })
   .get(
     "/",
     async (context) => {
-      const userId = await requireAuth(context);
-      const { client } = await opencodeManager.getOrSpawnAnyForUser(userId);
+      requireAuth(context);
+      const { client } = await opencodeServer.client();
 
       const [{ data: providers, error: providerError }, { data: auth, error: authError }] =
         await Promise.all([client.provider.list(), client.provider.auth()]);
@@ -183,12 +183,8 @@ export const providersRoute = new Elysia({ prefix: "/api/providers" })
         throw new Error("Failed to fetch provider auth methods");
       }
 
-      const mirroredCredentials = await db.query.providerCredential.findMany({
-        where: eq(providerCredential.user_id, userId),
-      });
-      const envProfileRows = await db.query.providerEnvProfile.findMany({
-        where: eq(providerEnvProfile.user_id, userId),
-      });
+      const mirroredCredentials = await db.query.providerCredential.findMany();
+      const envProfileRows = await db.query.providerEnvProfile.findMany();
       const profileKeysByProvider = new Map<string, Set<string>>();
       for (const row of envProfileRows) {
         const set = profileKeysByProvider.get(row.provider_id) ?? new Set<string>();
@@ -234,16 +230,16 @@ export const providersRoute = new Elysia({ prefix: "/api/providers" })
         summary: "List providers",
         tags: ["Providers"],
         description:
-          "List available providers/models, auth methods, and mirrored credential metadata for the authenticated user",
+          "List available providers/models, auth methods, and mirrored credential metadata",
       },
     },
   )
   .get(
     "/:providerId/env-schema",
     async (context) => {
-      const userId = await requireAuth(context);
+      requireAuth(context);
       const { providerId } = context.params;
-      const { client } = await opencodeManager.getOrSpawnAnyForUser(userId);
+      const { client } = await opencodeServer.client();
       const { data: providers, error } = await client.provider.list();
       if (error || !providers) {
         throw new Error("Failed to fetch providers");
@@ -279,9 +275,9 @@ export const providersRoute = new Elysia({ prefix: "/api/providers" })
   .get(
     "/:providerId/env-profile",
     async (context) => {
-      const userId = await requireAuth(context);
+      requireAuth(context);
       const { providerId } = context.params;
-      const { client } = await opencodeManager.getOrSpawnAnyForUser(userId);
+      const { client } = await opencodeServer.client();
       const { data: providers, error } = await client.provider.list();
       if (error || !providers) {
         throw new Error("Failed to fetch providers");
@@ -298,8 +294,7 @@ export const providersRoute = new Elysia({ prefix: "/api/providers" })
 
       const envSchema = buildProviderEnvSchema(provider.env ?? []);
       const rows = await db.query.providerEnvProfile.findMany({
-        where: (fields, { and, eq }) =>
-          and(eq(fields.user_id, userId), eq(fields.provider_id, providerId)),
+        where: (fields, { eq }) => eq(fields.provider_id, providerId),
       });
 
       const byKey = new Map(rows.map((row) => [row.env_key, row]));
@@ -339,17 +334,17 @@ export const providersRoute = new Elysia({ prefix: "/api/providers" })
         summary: "Get provider env profile",
         tags: ["Providers"],
         description:
-          "Get saved provider environment profile for the authenticated user (secrets are never returned)",
+          "Get saved provider environment profile (secrets are never returned)",
       },
     },
   )
   .put(
     "/:providerId/env-profile",
     async (context) => {
-      const userId = await requireAuth(context);
+      requireAuth(context);
       const { providerId } = context.params;
       const { values } = context.body;
-      const { client } = await opencodeManager.getOrSpawnAnyForUser(userId);
+      const { client } = await opencodeServer.client();
       const { data: providers, error } = await client.provider.list();
       if (error || !providers) {
         throw new Error("Failed to fetch providers");
@@ -376,8 +371,7 @@ export const providersRoute = new Elysia({ prefix: "/api/providers" })
       }
 
       const existingRows = await db.query.providerEnvProfile.findMany({
-        where: (fields, { and, eq }) =>
-          and(eq(fields.user_id, userId), eq(fields.provider_id, providerId)),
+        where: (fields, { eq }) => eq(fields.provider_id, providerId),
       });
       const existingKeys = new Set(existingRows.map((row) => row.env_key));
       const incomingKeys = new Set(incomingEntries.map(([key]) => key));
@@ -395,7 +389,6 @@ export const providersRoute = new Elysia({ prefix: "/api/providers" })
         await db
           .insert(providerEnvProfile)
           .values({
-            user_id: userId,
             provider_id: providerId,
             env_key: key,
             encrypted_value: encrypted.encryptedPayload,
@@ -405,7 +398,6 @@ export const providersRoute = new Elysia({ prefix: "/api/providers" })
           })
           .onConflictDoUpdate({
             target: [
-              providerEnvProfile.user_id,
               providerEnvProfile.provider_id,
               providerEnvProfile.env_key,
             ],
@@ -419,7 +411,7 @@ export const providersRoute = new Elysia({ prefix: "/api/providers" })
           });
       }
 
-      await opencodeManager.teardownAllForUser(userId);
+      await opencodeServer.restart();
 
       return { success: true };
     },
@@ -432,17 +424,17 @@ export const providersRoute = new Elysia({ prefix: "/api/providers" })
         summary: "Save provider env profile",
         tags: ["Providers"],
         description:
-          "Save encrypted provider environment values for the authenticated user and restart their OpenCode instances",
+          "Save encrypted provider environment values and restart the OpenCode server",
       },
     },
   )
   .post(
     "/:providerId/env-file/:envKey",
     async (context) => {
-      const userId = await requireAuth(context);
+      requireAuth(context);
       const { providerId, envKey } = context.params;
       const { file } = context.body;
-      const { client } = await opencodeManager.getOrSpawnAnyForUser(userId);
+      const { client } = await opencodeServer.client();
       const { data: providers, error } = await client.provider.list();
       if (error || !providers) {
         throw new Error("Failed to fetch providers");
@@ -482,8 +474,6 @@ export const providersRoute = new Elysia({ prefix: "/api/providers" })
       const sanitizedName = file.name.replace(/[^a-zA-Z0-9._-]/g, "_");
       const baseDir = resolve(
         env.KEPLER_SESSIONS_PATH,
-        userId,
-        "input",
         "provider-env",
         safeProviderId,
         safeEnvKey,
@@ -516,19 +506,14 @@ export const providersRoute = new Elysia({ prefix: "/api/providers" })
   .delete(
     "/:providerId/env-profile",
     async (context) => {
-      const userId = await requireAuth(context);
+      requireAuth(context);
       const { providerId } = context.params;
 
       await db
         .delete(providerEnvProfile)
-        .where(
-          and(
-            eq(providerEnvProfile.user_id, userId),
-            eq(providerEnvProfile.provider_id, providerId),
-          ),
-        );
+        .where(eq(providerEnvProfile.provider_id, providerId));
 
-      await opencodeManager.teardownAllForUser(userId);
+      await opencodeServer.restart();
 
       return { success: true };
     },
@@ -540,41 +525,30 @@ export const providersRoute = new Elysia({ prefix: "/api/providers" })
         summary: "Delete provider env profile",
         tags: ["Providers"],
         description:
-          "Delete stored provider environment profile for the authenticated user and restart their OpenCode instances",
+          "Delete stored provider environment profile and restart the OpenCode server",
       },
     },
   )
   .post(
     "/:providerId/auth",
     async (context) => {
-      const userId = await requireAuth(context);
+      requireAuth(context);
       const { providerId } = context.params;
       const payload = context.body as OpencodeAuth;
 
-      // Propagate auth.set to every running instance so each isolated
-      // XDG directory gets the new credential written.
-      const allInstances = await opencodeManager.getAllForUser(userId);
-      if (allInstances.length === 0) {
-        // No running instances — spawn one to write the auth
-        const { client } = await opencodeManager.getOrSpawnAnyForUser(userId);
-        allInstances.push({ client } as typeof allInstances[0]);
-      }
-
-      for (const inst of allInstances) {
-        const { data, error } = await inst.client.auth.set({
-          providerID: providerId,
-          auth: payload,
-        });
-        if (error || !data) {
-          throw new Error("Failed to set provider auth");
-        }
+      const { client } = await opencodeServer.client();
+      const { data, error } = await client.auth.set({
+        providerID: providerId,
+        auth: payload,
+      });
+      if (error || !data) {
+        throw new Error("Failed to set provider auth");
       }
 
       const encrypted = encryptProviderPayload(payload);
       await db
         .insert(providerCredential)
         .values({
-          user_id: userId,
           provider_id: providerId,
           auth_type: payload.type,
           encrypted_payload: encrypted.encryptedPayload,
@@ -583,7 +557,7 @@ export const providersRoute = new Elysia({ prefix: "/api/providers" })
           key_version: 1,
         })
         .onConflictDoUpdate({
-          target: [providerCredential.user_id, providerCredential.provider_id],
+          target: providerCredential.provider_id,
           set: {
             auth_type: payload.type,
             encrypted_payload: encrypted.encryptedPayload,
@@ -612,33 +586,20 @@ export const providersRoute = new Elysia({ prefix: "/api/providers" })
   .delete(
     "/:providerId/auth",
     async (context) => {
-      const userId = await requireAuth(context);
+      requireAuth(context);
       const { providerId } = context.params;
-      // Propagate auth.remove to every running instance so each isolated
-      // XDG directory has the credential removed.
-      const allInstances = await opencodeManager.getAllForUser(userId);
-      if (allInstances.length === 0) {
-        const { client } = await opencodeManager.getOrSpawnAnyForUser(userId);
-        allInstances.push({ client } as typeof allInstances[0]);
-      }
 
-      for (const inst of allInstances) {
-        const { data, error } = await inst.client.auth.remove({
-          providerID: providerId,
-        });
-        if (error || !data) {
-          throw new Error("Failed to remove provider auth");
-        }
+      const { client } = await opencodeServer.client();
+      const { data, error } = await client.auth.remove({
+        providerID: providerId,
+      });
+      if (error || !data) {
+        throw new Error("Failed to remove provider auth");
       }
 
       await db
         .delete(providerCredential)
-        .where(
-          and(
-            eq(providerCredential.user_id, userId),
-            eq(providerCredential.provider_id, providerId),
-          ),
-        );
+        .where(eq(providerCredential.provider_id, providerId));
 
       return { success: true };
     },
@@ -657,10 +618,10 @@ export const providersRoute = new Elysia({ prefix: "/api/providers" })
   .post(
     "/:providerId/oauth/authorize",
     async (context) => {
-      const userId = await requireAuth(context);
+      requireAuth(context);
       const { providerId } = context.params;
       const { method } = context.body;
-      const { client } = await opencodeManager.getOrSpawnAnyForUser(userId);
+      const { client } = await opencodeServer.client();
 
       const { data, error } = await client.provider.oauth.authorize({
         providerID: providerId,
@@ -688,10 +649,10 @@ export const providersRoute = new Elysia({ prefix: "/api/providers" })
   .post(
     "/:providerId/oauth/callback",
     async (context) => {
-      const userId = await requireAuth(context);
+      requireAuth(context);
       const { providerId } = context.params;
       const payload = context.body;
-      const { client } = await opencodeManager.getOrSpawnAnyForUser(userId);
+      const { client } = await opencodeServer.client();
 
       const { data, error } = await client.provider.oauth.callback({
         providerID: providerId,
@@ -714,7 +675,6 @@ export const providersRoute = new Elysia({ prefix: "/api/providers" })
       await db
         .insert(providerCredential)
         .values({
-          user_id: userId,
           provider_id: providerId,
           auth_type: "oauth",
           encrypted_payload: encrypted.encryptedPayload,
@@ -723,7 +683,7 @@ export const providersRoute = new Elysia({ prefix: "/api/providers" })
           key_version: 1,
         })
         .onConflictDoUpdate({
-          target: [providerCredential.user_id, providerCredential.provider_id],
+          target: providerCredential.provider_id,
           set: {
             auth_type: "oauth",
             encrypted_payload: encrypted.encryptedPayload,

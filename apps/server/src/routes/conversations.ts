@@ -2,11 +2,10 @@ import { Elysia, t } from "elysia";
 import { db } from "@kepler-chat/db";
 import { conversation } from "@kepler-chat/db/schema/opencode";
 import { eq } from "drizzle-orm";
-import { opencodeManager } from "../services/opencode";
+import { opencodeServer } from "../services/opencode";
 import { requireAuth } from "../middleware/auth";
 import { generateId } from "../lib/id";
 import {
-  getConversationPlaygroundPath,
   getConversationRoot,
   provisionConversationDirectories,
 } from "../lib/conversation-paths";
@@ -14,10 +13,9 @@ import { rm } from "node:fs/promises";
 
 export const conversationsRoute = new Elysia({ prefix: "/api/conversations" })
   .get("/", async (context) => {
-    const userId = await requireAuth(context);
+    requireAuth(context);
 
     const conversations = await db.query.conversation.findMany({
-      where: eq(conversation.user_id, userId),
       orderBy: (conversation, { desc }) => [desc(conversation.updated_at)],
     });
 
@@ -26,53 +24,55 @@ export const conversationsRoute = new Elysia({ prefix: "/api/conversations" })
     detail: {
       summary: "List conversations",
       tags: ["Conversations"],
-      description: "Get all conversations for the authenticated user",
+      description: "Get all conversations",
     },
   })
   .post(
     "/",
     async (context) => {
-      const userId = await requireAuth(context);
+      requireAuth(context);
       const { title } = context.body;
 
       const conversationId = generateId();
-
-      // Insert conversation row first — opencode_conversation_instance has an FK
-      // to conversation.id, so the row must exist before getOrSpawn.
-      await db.insert(conversation).values({
-        id: conversationId,
-        user_id: userId,
-        opencode_session_id: "__pending__",
-        title,
-      });
+      const conversationRoot = getConversationRoot(conversationId);
+      let createdSessionId: string | null = null;
 
       try {
-        await provisionConversationDirectories(userId, conversationId);
-        const playgroundPath = getConversationPlaygroundPath(userId, conversationId);
+        await provisionConversationDirectories(conversationId);
 
-        const { client } = await opencodeManager.getOrSpawn(userId, conversationId);
+        const { client } = await opencodeServer.conversationClient(conversationId);
 
         const { data: session, error } = await client.session.create({
           title,
-          directory: playgroundPath,
         });
 
         if (error || !session) {
           throw new Error("Failed to create session");
         }
+        createdSessionId = session.id;
 
-        await db
-          .update(conversation)
-          .set({
-            opencode_session_id: session.id,
-            title: session.title,
-          })
-          .where(eq(conversation.id, conversationId));
+        await db.insert(conversation).values({
+          id: conversationId,
+          opencode_session_id: session.id,
+          title: session.title,
+        });
 
         return { id: conversationId, session };
       } catch (err) {
-        // Clean up the conversation row if spawn/session creation fails
-        await db.delete(conversation).where(eq(conversation.id, conversationId));
+        if (createdSessionId) {
+          const { client } = await opencodeServer.conversationClient(conversationId);
+          const { error } = await client.session.delete({
+            sessionID: createdSessionId,
+          });
+          if (error) {
+            throw new AggregateError(
+              [err, error],
+              "Failed to create conversation and clean up OpenCode session",
+            );
+          }
+        }
+
+        await rm(conversationRoot, { recursive: true, force: true });
         throw err;
       }
     },
@@ -88,12 +88,11 @@ export const conversationsRoute = new Elysia({ prefix: "/api/conversations" })
     },
   )
   .get("/:id", async (context) => {
-    const userId = await requireAuth(context);
+    requireAuth(context);
     const { id } = context.params;
 
     const conv = await db.query.conversation.findFirst({
-      where: (fields, { and, eq }) =>
-        and(eq(fields.id, id), eq(fields.user_id, userId)),
+      where: (fields, { eq }) => eq(fields.id, id),
     });
 
     if (!conv) {
@@ -112,21 +111,26 @@ export const conversationsRoute = new Elysia({ prefix: "/api/conversations" })
     },
   })
   .delete("/:id", async (context) => {
-    const userId = await requireAuth(context);
+    requireAuth(context);
     const { id } = context.params;
 
     const conv = await db.query.conversation.findFirst({
-      where: (fields, { and, eq }) =>
-        and(eq(fields.id, id), eq(fields.user_id, userId)),
+      where: (fields, { eq }) => eq(fields.id, id),
     });
 
     if (!conv) {
       throw new Error("Conversation not found");
     }
 
-    await opencodeManager.teardown(id);
+    const conversationRoot = getConversationRoot(id);
+    const { client } = await opencodeServer.conversationClient(id);
+    const { error } = await client.session.delete({
+      sessionID: conv.opencode_session_id,
+    });
+    if (error) {
+      throw new Error("Failed to delete OpenCode session");
+    }
 
-    const conversationRoot = getConversationRoot(userId, id);
     await rm(conversationRoot, { recursive: true, force: true });
 
     await db.delete(conversation).where(eq(conversation.id, id));
@@ -139,6 +143,6 @@ export const conversationsRoute = new Elysia({ prefix: "/api/conversations" })
     detail: {
       summary: "Delete conversation",
       tags: ["Conversations"],
-      description: "Delete a conversation, its OpenCode session, instance, and files",
+      description: "Delete a conversation, its OpenCode session, and files",
     },
   });

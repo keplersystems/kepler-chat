@@ -8,7 +8,6 @@
     type Provider,
     type ModelSelection,
   } from "$lib/api/chat";
-  import { authClient } from "$lib/auth-client";
   import ChatLayout from "../../../../components/chat/ChatLayout.svelte";
   import MessageList from "../../../../components/chat/MessageList.svelte";
   import MessageInput from "../../../../components/chat/MessageInput.svelte";
@@ -25,7 +24,7 @@
     };
   }>();
 
-  const session = authClient.useSession();
+  const localUser = { name: "Local" };
   const chatState = createChatState();
   let conversations = $state<ConversationDTO[]>([]);
   let conversationTitle = $state("");
@@ -331,7 +330,7 @@
 <ChatLayout 
   {conversations}
   currentConversationId={data.conversation.id}
-  user={$session.data?.user}
+  user={localUser}
 >
   <div class="flex h-full">
     <!-- Main Chat Area -->

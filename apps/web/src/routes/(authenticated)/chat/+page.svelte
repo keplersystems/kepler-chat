@@ -3,11 +3,9 @@
   import Button from '../../../components/ui/Button.svelte';
   import { api } from '$lib/api/chat';
   import { goto } from '$app/navigation';
-  import { authClient } from '$lib/auth-client';
 
   let { data } = $props();
-  
-  const session = authClient.useSession();
+  const localUser = { name: "Local" };
   
   async function createNewChat() {
     try {
@@ -21,7 +19,7 @@
 
 <ChatLayout 
   conversations={data.conversations} 
-  user={$session.data?.user}
+  user={localUser}
 >
   <div class="flex h-full flex-col items-center justify-center gap-6 p-8 text-center">
     <div class="space-y-2">

@@ -2,7 +2,6 @@ import { z } from "zod";
 
 export interface ConversationDTO {
   id: string;
-  user_id: string;
   opencode_session_id: string;
   title: string;
   created_at: Date;
@@ -79,22 +78,6 @@ export interface ListOutputFilesResponse {
 }
 
 export type FileScope = "input" | "output";
-
-export interface AdminInstanceDTO {
-  conversationId: string;
-  userId: string;
-  serverUrl: string;
-  port: number;
-  pid: number | null;
-  status: string;
-  spawnedAt: string;
-  lastActiveAt: string;
-  error: string | null;
-}
-
-export interface ListInstancesResponse {
-  instances: AdminInstanceDTO[];
-}
 
 export interface SuccessResponse {
   success: true;

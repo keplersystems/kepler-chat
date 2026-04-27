@@ -2,17 +2,19 @@ import { Elysia, t } from "elysia";
 import { db } from "@kepler-chat/db";
 import { conversation, conversationMessageModel } from "@kepler-chat/db/schema/opencode";
 import { eq } from "drizzle-orm";
-import { opencodeManager } from "../services/opencode";
+import { opencodeServer } from "../services/opencode";
 import { requireAuth } from "../middleware/auth";
 import type { Event, FilePartInput, TextPartInput } from "@opencode-ai/sdk/v2";
 import { basename } from "node:path";
 import { pathToFileURL } from "node:url";
 import { resolveSafeFilePath, statOrNull } from "../lib/files";
-import { getConversationInputPath } from "../lib/conversation-paths";
-
-function formatSSE(id: string, event: string, data: string): string {
-  return `id: ${id}\nevent: ${event}\ndata: ${data}\n\n`;
-}
+import {
+  getConversationInputPath,
+} from "../lib/conversation-paths";
+import {
+  hasProviderModel,
+  type ProviderModelCatalog,
+} from "../lib/provider-models";
 
 function getSessionIdFromEvent(event: Event): string | undefined {
   switch (event.type) {
@@ -92,41 +94,26 @@ function getConversationTitleFromEvent(event: Event): string | null {
   return title;
 }
 
-interface ProviderModelCatalog {
-  id?: string;
-  models?: Record<string, { id?: string }>;
-}
-
-function hasProviderModel(providers: ProviderModelCatalog[], providerId: string, modelId: string): boolean {
-  const provider = providers.find((item) => item.id === providerId);
-  if (!provider?.models) {
-    return false;
-  }
-
-  if (modelId in provider.models) {
-    return true;
-  }
-
-  return Object.values(provider.models).some((model) => model.id === modelId);
+function formatSSE(id: string, event: string, data: string): string {
+  return `id: ${id}\nevent: ${event}\ndata: ${data}\n\n`;
 }
 
 export const messagesRoute = new Elysia({ prefix: "/api/conversations" })
   .get(
     "/:id/messages",
     async (context) => {
-      const userId = await requireAuth(context);
+      requireAuth(context);
       const { id } = context.params;
 
       const conv = await db.query.conversation.findFirst({
-        where: (fields, { and, eq }) =>
-          and(eq(fields.id, id), eq(fields.user_id, userId)),
+        where: (fields, { eq }) => eq(fields.id, id),
       });
 
       if (!conv) {
         throw new Error("Conversation not found");
       }
 
-      const { client } = await opencodeManager.getOrSpawn(userId, id);
+      const { client } = await opencodeServer.conversationClient(id);
       const { data: messages, error } = await client.session.messages({
         sessionID: conv.opencode_session_id,
       });
@@ -151,20 +138,19 @@ export const messagesRoute = new Elysia({ prefix: "/api/conversations" })
   .post(
     "/:id/messages",
     async (context) => {
-      const userId = await requireAuth(context);
+      requireAuth(context);
       const { id } = context.params;
       const { text, model, attachments = [] } = context.body;
 
       const conv = await db.query.conversation.findFirst({
-        where: (fields, { and, eq }) =>
-          and(eq(fields.id, id), eq(fields.user_id, userId)),
+        where: (fields, { eq }) => eq(fields.id, id),
       });
 
       if (!conv) {
         throw new Error("Conversation not found");
       }
 
-      const { client } = await opencodeManager.getOrSpawn(userId, id);
+      const { client } = await opencodeServer.conversationClient(id);
       const { data: providerCatalog, error: providerCatalogError } =
         await client.provider.list();
       if (providerCatalogError || !providerCatalog) {
@@ -193,7 +179,7 @@ export const messagesRoute = new Elysia({ prefix: "/api/conversations" })
         return { error: "Message text or attachment is required" };
       }
 
-      const inputBasePath = getConversationInputPath(userId, id);
+      const inputBasePath = getConversationInputPath(id);
       const fileParts: FilePartInput[] = [];
       for (const attachment of attachments) {
         let absolutePath: string;
@@ -268,9 +254,7 @@ export const messagesRoute = new Elysia({ prefix: "/api/conversations" })
                 model,
               });
               if (result.error || !result.data) {
-                throw new Error(
-                  result.error?.message ?? "Failed to send prompt",
-                );
+                throw new Error("Failed to send prompt");
               }
 
               if ("info" in result.data && "parentID" in result.data.info) {
@@ -280,7 +264,6 @@ export const messagesRoute = new Elysia({ prefix: "/api/conversations" })
                     .insert(conversationMessageModel)
                     .values({
                       conversation_id: id,
-                      user_id: userId,
                       opencode_message_id: parentID,
                       provider_id: model.providerID,
                       model_id: model.modelID,

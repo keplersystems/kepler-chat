@@ -2,39 +2,22 @@ import { Elysia, t } from "elysia";
 import { db } from "@kepler-chat/db";
 import { conversation } from "@kepler-chat/db/schema/opencode";
 import { eq } from "drizzle-orm";
-import { opencodeManager } from "../services/opencode";
+import { opencodeServer } from "../services/opencode";
 import { requireAuth } from "../middleware/auth";
-import { requireConversationOwnership } from "../lib/conversation";
-
-interface ProviderModelCatalog {
-  id?: string;
-  models?: Record<string, { id?: string }>;
-}
-
-function hasProviderModel(
-  providers: ProviderModelCatalog[],
-  providerId: string,
-  modelId: string,
-): boolean {
-  const provider = providers.find((item) => item.id === providerId);
-  if (!provider?.models) {
-    return false;
-  }
-
-  if (modelId in provider.models) {
-    return true;
-  }
-
-  return Object.values(provider.models).some((model) => model.id === modelId);
-}
+import {
+  hasProviderModel,
+  type ProviderModelCatalog,
+} from "../lib/provider-models";
 
 export const modelsRoute = new Elysia({ prefix: "/api/conversations" })
   .get(
     "/:id/model",
     async (context) => {
-      const userId = await requireAuth(context);
+      requireAuth(context);
       const { id } = context.params;
-      const conv = await requireConversationOwnership(id, userId);
+      const conv = await db.query.conversation.findFirst({
+        where: (fields, { eq }) => eq(fields.id, id),
+      });
 
       if (!conv) {
         context.set.status = 404;
@@ -66,17 +49,19 @@ export const modelsRoute = new Elysia({ prefix: "/api/conversations" })
   .put(
     "/:id/model",
     async (context) => {
-      const userId = await requireAuth(context);
+      requireAuth(context);
       const { id } = context.params;
       const { providerID, modelID } = context.body;
-      const conv = await requireConversationOwnership(id, userId);
+      const conv = await db.query.conversation.findFirst({
+        where: (fields, { eq }) => eq(fields.id, id),
+      });
 
       if (!conv) {
         context.set.status = 404;
         return { error: "Conversation not found" };
       }
 
-      const { client } = await opencodeManager.getOrSpawn(userId, id);
+      const { client } = await opencodeServer.conversationClient(id);
       const { data: providers, error } = await client.provider.list();
       if (error || !providers) {
         throw new Error("Failed to fetch provider catalog");

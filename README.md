@@ -1,6 +1,6 @@
 # kepler-chat
 
-This project was created with [Better-T-Stack](https://github.com/AmanVarshney01/create-better-t-stack), a modern TypeScript stack that combines SvelteKit, Elysia, and more.
+Single-user LLM chat app using one always-on OpenCode server with per-conversation directory isolation.
 
 ## Features
 
@@ -12,7 +12,8 @@ This project was created with [Better-T-Stack](https://github.com/AmanVarshney01
 - **Bun** - Runtime environment
 - **Drizzle** - TypeScript-first ORM
 - **SQLite/Turso** - Database engine
-- **Authentication** - Better-Auth
+- **Authentication** - Shared passcode cookie
+- **Agent backend** - OpenCode SDK/server
 
 ## Getting Started
 
@@ -21,6 +22,8 @@ First, install the dependencies:
 ```bash
 bun install
 ```
+
+Set `KEPLER_PASSCODE` in `apps/server/.env` to a value with at least 4 characters.
 
 ## Database Setup
 
@@ -57,9 +60,10 @@ kepler-chat/
 │   ├── web/         # Frontend application (SvelteKit)
 │   └── server/      # Backend API (Elysia)
 ├── packages/
-│   ├── api/         # API layer / business logic
-│   ├── auth/        # Authentication configuration & logic
-│   └── db/          # Database schema & queries
+│   ├── db/          # Database schema & queries
+│   ├── env/         # Environment validation
+│   ├── opencode-manager/
+│   └── sandbox/
 ```
 
 ## Available Scripts

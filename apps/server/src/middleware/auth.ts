@@ -1,20 +1,53 @@
 import type { Context } from "elysia";
-import { auth } from "@kepler-chat/auth";
+import { env } from "@kepler-chat/env/server";
+import { createHash, timingSafeEqual } from "node:crypto";
 
-export interface AuthContext extends Context {
-  userId: string;
+const COOKIE_NAME = "kepler_session";
+
+function sessionToken(): string {
+  return createHash("sha256")
+    .update(`kepler:${env.KEPLER_PASSCODE}`)
+    .digest("base64url");
 }
 
-/**
- * Extracts userId from Better-Auth session.
- * Throws 401 if not authenticated.
- */
-export async function requireAuth(context: Context): Promise<string> {
-  const session = await auth.api.getSession({ headers: context.request.headers });
+function cookieValue(headers: Headers, name: string): string | null {
+  const cookie = headers.get("cookie");
+  if (!cookie) return null;
 
-  if (!session?.user?.id) {
-    throw new Error("Unauthorized");
+  for (const part of cookie.split(";")) {
+    const [key, ...rest] = part.trim().split("=");
+    if (key === name) {
+      return rest.join("=");
+    }
   }
 
-  return session.user.id;
+  return null;
+}
+
+function constantTimeEqual(left: string, right: string): boolean {
+  const leftBuffer = Buffer.from(left);
+  const rightBuffer = Buffer.from(right);
+  if (leftBuffer.length !== rightBuffer.length) return false;
+  return timingSafeEqual(leftBuffer, rightBuffer);
+}
+
+export function isAuthenticated(headers: Headers): boolean {
+  const value = cookieValue(headers, COOKIE_NAME);
+  return value !== null && constantTimeEqual(value, sessionToken());
+}
+
+export function requireAuth(context: Context): void {
+  if (!isAuthenticated(context.request.headers)) {
+    throw new Error("Unauthorized");
+  }
+}
+
+export function createAuthCookie(): string {
+  const secure = env.NODE_ENV === "production" ? " Secure;" : "";
+  return `${COOKIE_NAME}=${sessionToken()}; HttpOnly; Path=/; SameSite=Lax;${secure} Max-Age=2592000`;
+}
+
+export function clearAuthCookie(): string {
+  const secure = env.NODE_ENV === "production" ? " Secure;" : "";
+  return `${COOKIE_NAME}=; HttpOnly; Path=/; SameSite=Lax;${secure} Max-Age=0`;
 }

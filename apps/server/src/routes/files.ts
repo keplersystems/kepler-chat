@@ -1,4 +1,5 @@
 import { Elysia, t } from "elysia";
+import { db } from "@kepler-chat/db";
 import type {
   FileScope,
   ListOutputFilesResponse,
@@ -16,40 +17,40 @@ import {
   provisionConversationDirectories,
 } from "../lib/conversation-paths";
 import { requireAuth } from "../middleware/auth";
-import { requireConversationOwnership } from "../lib/conversation";
 import { basename } from "node:path";
 
 function getConversationScopePath(
-  userId: string,
   conversationId: string,
   scope: FileScope,
 ): string {
   return scope === "input"
-    ? getConversationInputPath(userId, conversationId)
-    : getConversationOutputPath(userId, conversationId);
+    ? getConversationInputPath(conversationId)
+    : getConversationOutputPath(conversationId);
 }
 
 export const filesRoute = new Elysia({ prefix: "/api/conversations" })
   .post(
     "/:id/files/upload",
     async (context): Promise<UploadFileResponse | { error: string }> => {
-      const userId = await requireAuth(context);
+      requireAuth(context);
       const { id } = context.params;
       const { file } = context.body;
 
-      const conversation = await requireConversationOwnership(id, userId);
+      const conversation = await db.query.conversation.findFirst({
+        where: (fields, { eq }) => eq(fields.id, id),
+      });
       if (!conversation) {
         context.set.status = 404;
         return { error: "Conversation not found" };
       }
 
-      await provisionConversationDirectories(userId, id);
+      await provisionConversationDirectories(id);
       if (!(file instanceof File)) {
         context.set.status = 400;
         return { error: "Missing file upload" };
       }
 
-      const inputPath = getConversationInputPath(userId, id);
+      const inputPath = getConversationInputPath(id);
       const { absolutePath, relativePath } = await resolveAvailableFilePath(
         inputPath,
         file.name,
@@ -83,18 +84,20 @@ export const filesRoute = new Elysia({ prefix: "/api/conversations" })
   .get(
     "/:id/files/output",
     async (context): Promise<ListOutputFilesResponse | { error: string }> => {
-      const userId = await requireAuth(context);
+      requireAuth(context);
       const { id } = context.params;
       const { prefix } = context.query;
 
-      const conversation = await requireConversationOwnership(id, userId);
+      const conversation = await db.query.conversation.findFirst({
+        where: (fields, { eq }) => eq(fields.id, id),
+      });
       if (!conversation) {
         context.set.status = 404;
         return { error: "Conversation not found" };
       }
 
-      await provisionConversationDirectories(userId, id);
-      const outputPath = getConversationOutputPath(userId, id);
+      await provisionConversationDirectories(id);
+      const outputPath = getConversationOutputPath(id);
 
       let startPath = outputPath;
       if (prefix) {
@@ -137,12 +140,14 @@ export const filesRoute = new Elysia({ prefix: "/api/conversations" })
   .get(
     "/:id/files/*",
     async (context): Promise<Response | { error: string }> => {
-      const userId = await requireAuth(context);
+      requireAuth(context);
       const { id } = context.params;
       const filePath = (context.params as { id: string; "*": string })["*"];
       const { scope } = context.query;
 
-      const conversation = await requireConversationOwnership(id, userId);
+      const conversation = await db.query.conversation.findFirst({
+        where: (fields, { eq }) => eq(fields.id, id),
+      });
       if (!conversation) {
         context.set.status = 404;
         return { error: "Conversation not found" };
@@ -154,7 +159,7 @@ export const filesRoute = new Elysia({ prefix: "/api/conversations" })
       }
 
       const fileScope: FileScope = scope ?? "output";
-      const basePath = getConversationScopePath(userId, id, fileScope);
+      const basePath = getConversationScopePath(id, fileScope);
 
       let absolutePath: string;
       try {
@@ -196,7 +201,7 @@ export const filesRoute = new Elysia({ prefix: "/api/conversations" })
         summary: "Download file",
         tags: ["Files"],
         description:
-          "Download a file from input or output scope for an owned conversation",
+          "Download a file from input or output scope for a conversation",
       },
     },
   );
