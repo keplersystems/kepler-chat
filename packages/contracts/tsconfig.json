@@ -1,8 +1,0 @@
-{
-  "extends": "@kepler-chat/config/tsconfig.base.json",
-  "compilerOptions": {
-    "composite": true,
-    "outDir": "dist"
-  },
-  "include": ["src/**/*.ts"]
-}
