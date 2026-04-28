@@ -9,10 +9,13 @@
   import CircleFadingArrowUp from '@lucide/svelte/icons/circle-fading-arrow-up';
   import EyeIcon from '@lucide/svelte/icons/eye';
   import ImageIcon from '@lucide/svelte/icons/image';
+  import CheckIcon from '@lucide/svelte/icons/check';
   import PaperclipIcon from '@lucide/svelte/icons/paperclip';
   import SearchIcon from '@lucide/svelte/icons/search';
+  import SendIcon from '@lucide/svelte/icons/send';
   import VideoIcon from '@lucide/svelte/icons/video';
   import WrenchIcon from '@lucide/svelte/icons/wrench';
+  import XIcon from '@lucide/svelte/icons/x';
 
   interface ModelOption {
     value: string;
@@ -374,10 +377,7 @@
               class="rounded-sm opacity-60 hover:opacity-100"
               aria-label="Remove file"
             >
-              <svg xmlns="http://www.w3.org/2000/svg" width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
-                <path d="M18 6 6 18" />
-                <path d="m6 6 12 12" />
-              </svg>
+              <XIcon size={12} />
             </button>
           </div>
         {/each}
@@ -479,20 +479,7 @@
                         <span class="font-mono text-[10px] tabular-nums text-muted-foreground">{ctx}</span>
                       {/if}
                       {#if selected}
-                        <svg
-                          xmlns="http://www.w3.org/2000/svg"
-                          width="12"
-                          height="12"
-                          viewBox="0 0 24 24"
-                          fill="none"
-                          stroke="currentColor"
-                          stroke-width="2.5"
-                          stroke-linecap="round"
-                          stroke-linejoin="round"
-                          class="opacity-80"
-                        >
-                          <path d="M20 6 9 17l-5-5" />
-                        </svg>
+                        <CheckIcon size={12} strokeWidth={2.5} class="opacity-80" />
                       {/if}
                     {/snippet}
                   </Select.Item>
@@ -515,10 +502,7 @@
         class="h-9 w-9"
         aria-label="Send message"
       >
-        <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
-          <path d="m22 2-7 20-4-9-9-4Z" />
-          <path d="M22 2 11 13" />
-        </svg>
+        <SendIcon size={16} />
       </Button>
     </div>
   </div>

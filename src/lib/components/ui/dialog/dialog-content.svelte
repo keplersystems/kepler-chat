@@ -3,6 +3,7 @@
   import type { ComponentProps } from "svelte";
   import { cn } from "$lib/utils";
   import DialogOverlay from "./dialog-overlay.svelte";
+  import XIcon from "@lucide/svelte/icons/x";
 
   let {
     class: className,
@@ -24,10 +25,7 @@
     <DialogPrimitive.Close
       class="absolute right-4 top-4 rounded-md p-1 text-muted-foreground opacity-70 transition-opacity hover:opacity-100 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 disabled:pointer-events-none"
     >
-      <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
-        <path d="M18 6 6 18" />
-        <path d="m6 6 12 12" />
-      </svg>
+      <XIcon size={16} />
       <span class="sr-only">Close</span>
     </DialogPrimitive.Close>
   </DialogPrimitive.Content>

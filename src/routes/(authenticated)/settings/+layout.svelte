@@ -1,6 +1,6 @@
 <script lang="ts">
   import type { Snippet } from 'svelte';
-  import { page } from '$app/stores';
+  import { page } from '$app/state';
 
   interface Props {
     children: Snippet;
@@ -12,7 +12,7 @@
     { id: 'providers', label: 'Providers', href: '/settings/providers' },
   ];
 
-  const currentPath = $derived($page.url.pathname);
+  const currentPath = $derived(page.url.pathname);
 </script>
 
 <div class="flex h-screen w-full overflow-hidden bg-background">

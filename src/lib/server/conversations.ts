@@ -45,11 +45,16 @@ export async function createConversation(title: string): Promise<CreatedConversa
   }
 }
 
-export async function deleteConversation(id: string): Promise<void> {
+export async function requireConversation(id: string) {
   const conv = await db.query.conversation.findFirst({
     where: (fields, { eq: eqOp }) => eqOp(fields.id, id),
   });
   if (!conv) throw new HttpError(404, "Conversation not found");
+  return conv;
+}
+
+export async function deleteConversation(id: string): Promise<void> {
+  const conv = await requireConversation(id);
 
   const { client } = await opencodeServer.conversationClient(id);
   const { error } = await client.session.delete({ sessionID: conv.opencode_session_id });

@@ -7,6 +7,7 @@ import {
 import { eq } from "drizzle-orm";
 import { opencodeServer } from "$lib/server/opencode/supervisor";
 import { requireAuth } from "$lib/server/auth";
+import { HttpError } from "$lib/server/http-error";
 import {
   decryptProviderPayload,
   encryptProviderPayload,
@@ -106,12 +107,13 @@ function buildProviderEnvSchema(envVars: string[]): ProviderEnvFieldSchema[] {
   });
 }
 
-function getProviderFromList(
-  providers: ProviderListItem[],
-  providerId: string,
-): ProviderListItem | null {
-  const provider = providers.find((item) => item.id === providerId);
-  return provider ?? null;
+async function requireProvider(providerId: string): Promise<ProviderListItem> {
+  const { client } = await opencodeServer.client();
+  const { data, error } = await client.provider.list();
+  if (error || !data) throw new Error("Failed to fetch providers");
+  const provider = (data.all as ProviderListItem[]).find((p) => p.id === providerId);
+  if (!provider) throw new HttpError(404, "Provider not found");
+  return provider;
 }
 
 function normalizeProviderCapabilities(input: {
@@ -239,20 +241,7 @@ export const providersRoute = new Elysia({ prefix: "/api/providers" })
     async (context) => {
       requireAuth(context);
       const { providerId } = context.params;
-      const { client } = await opencodeServer.client();
-      const { data: providers, error } = await client.provider.list();
-      if (error || !providers) {
-        throw new Error("Failed to fetch providers");
-      }
-
-      const provider = getProviderFromList(
-        providers.all as ProviderListItem[],
-        providerId,
-      );
-      if (!provider) {
-        context.set.status = 404;
-        return { error: "Provider not found" };
-      }
+      const provider = await requireProvider(providerId);
 
       const envSchema = buildProviderEnvSchema(provider.env ?? []);
       return {
@@ -277,20 +266,7 @@ export const providersRoute = new Elysia({ prefix: "/api/providers" })
     async (context) => {
       requireAuth(context);
       const { providerId } = context.params;
-      const { client } = await opencodeServer.client();
-      const { data: providers, error } = await client.provider.list();
-      if (error || !providers) {
-        throw new Error("Failed to fetch providers");
-      }
-
-      const provider = getProviderFromList(
-        providers.all as ProviderListItem[],
-        providerId,
-      );
-      if (!provider) {
-        context.set.status = 404;
-        return { error: "Provider not found" };
-      }
+      const provider = await requireProvider(providerId);
 
       const envSchema = buildProviderEnvSchema(provider.env ?? []);
       const rows = await db.query.providerEnvProfile.findMany({
@@ -344,20 +320,7 @@ export const providersRoute = new Elysia({ prefix: "/api/providers" })
       requireAuth(context);
       const { providerId } = context.params;
       const { values } = context.body;
-      const { client } = await opencodeServer.client();
-      const { data: providers, error } = await client.provider.list();
-      if (error || !providers) {
-        throw new Error("Failed to fetch providers");
-      }
-
-      const provider = getProviderFromList(
-        providers.all as ProviderListItem[],
-        providerId,
-      );
-      if (!provider) {
-        context.set.status = 404;
-        return { error: "Provider not found" };
-      }
+      const provider = await requireProvider(providerId);
 
       const envVars = provider.env ?? [];
       const allowed = new Set(envVars);
@@ -434,20 +397,7 @@ export const providersRoute = new Elysia({ prefix: "/api/providers" })
       requireAuth(context);
       const { providerId, envKey } = context.params;
       const { file } = context.body;
-      const { client } = await opencodeServer.client();
-      const { data: providers, error } = await client.provider.list();
-      if (error || !providers) {
-        throw new Error("Failed to fetch providers");
-      }
-
-      const provider = getProviderFromList(
-        providers.all as ProviderListItem[],
-        providerId,
-      );
-      if (!provider) {
-        context.set.status = 404;
-        return { error: "Provider not found" };
-      }
+      const provider = await requireProvider(providerId);
 
       const envSchema = buildProviderEnvSchema(provider.env ?? []);
       const envField = envSchema.find((field) => field.key === envKey);

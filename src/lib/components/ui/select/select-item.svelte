@@ -2,6 +2,7 @@
   import { Select as SelectPrimitive } from "bits-ui";
   import type { ComponentProps } from "svelte";
   import { cn } from "$lib/utils";
+  import CheckIcon from "@lucide/svelte/icons/check";
 
   let {
     class: className,
@@ -27,21 +28,7 @@
     {:else}
       <span class="flex-1 truncate">{label ?? value}</span>
       {#if snippetProps.selected}
-        <svg
-          xmlns="http://www.w3.org/2000/svg"
-          width="14"
-          height="14"
-          viewBox="0 0 24 24"
-          fill="none"
-          stroke="currentColor"
-          stroke-width="2.5"
-          stroke-linecap="round"
-          stroke-linejoin="round"
-          class="opacity-80"
-          aria-hidden="true"
-        >
-          <path d="M20 6 9 17l-5-5" />
-        </svg>
+        <CheckIcon size={14} strokeWidth={2.5} class="opacity-80" aria-hidden="true" />
       {/if}
     {/if}
   {/snippet}

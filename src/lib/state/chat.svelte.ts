@@ -2,8 +2,10 @@ import type { PendingRequestDTO, SendMessageInput } from "$lib/contracts";
 import { invalidateAll } from "$app/navigation";
 import { parseSSEStream } from "$lib/sse";
 import {
+  extractTokens,
+  getRequestId,
   isTerminalFinish,
-  type MessageTokens,
+  toToolCallView,
   type MessageView,
   type ToolCallView,
 } from "$lib/messages";
@@ -11,20 +13,23 @@ import {
 export type { MessageView, MessageTokens, ToolCallView } from "$lib/messages";
 export { toMessageViewList } from "$lib/messages";
 
-interface StreamingInfo {
-  modelID?: string;
-  providerID?: string;
-  tokens?: MessageTokens;
-  createdAt?: number;
+interface StreamingMessage extends MessageView {
+  toolCallsById: Record<string, ToolCallView>;
 }
 
-function getRequestId(value: unknown): string | null {
-  if (!value || typeof value !== "object") return null;
-  const obj = value as { id?: unknown; requestID?: unknown; requestId?: unknown };
-  if (typeof obj.id === "string" && obj.id.length > 0) return obj.id;
-  if (typeof obj.requestID === "string" && obj.requestID.length > 0) return obj.requestID;
-  if (typeof obj.requestId === "string" && obj.requestId.length > 0) return obj.requestId;
-  return null;
+function emptyMessage(id: string, role: MessageView["role"]): StreamingMessage {
+  return { id, role, text: "", reasoning: "", toolCallsById: {}, toolCalls: [] };
+}
+
+function shouldEmit(msg: StreamingMessage): boolean {
+  if (msg.text.trim().length > 0) return true;
+  if ((msg.reasoning ?? "").trim().length > 0) return true;
+  if (Object.keys(msg.toolCallsById).length > 0) return true;
+  return isTerminalFinish(msg.finish);
+}
+
+function toMessageView(msg: StreamingMessage): MessageView {
+  return { ...msg, toolCalls: Object.values(msg.toolCallsById) };
 }
 
 function createChatStore() {
@@ -44,11 +49,8 @@ function createChatStore() {
     streamingByConversation = next;
   }
 
-  function upsertStreaming(conversationId: string, message: MessageView) {
-    const list = streamingByConversation[conversationId] ?? [];
-    const idx = list.findIndex((m) => m.id === message.id);
-    const next = idx === -1 ? [...list, message] : list.with(idx, message);
-    streamingByConversation = { ...streamingByConversation, [conversationId]: next };
+  function writeStreaming(conversationId: string, messages: MessageView[]) {
+    streamingByConversation = { ...streamingByConversation, [conversationId]: messages };
   }
 
   function reset() {
@@ -93,87 +95,39 @@ function createChatStore() {
     isStreaming = true;
     let succeeded = false;
 
-    const userEcho: MessageView = {
-      id: crypto.randomUUID(),
-      role: "user",
+    const messages = new Map<string, StreamingMessage>();
+    let lastTitle: string | null = null;
+
+    const userEcho: StreamingMessage = {
+      ...emptyMessage(crypto.randomUUID(), "user"),
       text:
         input.text +
         (input.attachments?.length
           ? `\n\n[Attached ${input.attachments.length} file(s)]`
           : ""),
     };
-    upsertStreaming(conversationId, userEcho);
 
-    const roleById = new Map<string, MessageView["role"]>();
-    const textById = new Map<string, string>();
-    const reasoningById = new Map<string, string>();
-    const toolsById = new Map<string, Map<string, ToolCallView>>();
-    const finishById = new Map<string, string | undefined>();
-    const infoById = new Map<string, StreamingInfo>();
-    let lastTitle: string | null = null;
-
-    const extractTokens = (raw: unknown): MessageTokens | undefined => {
-      if (!raw || typeof raw !== "object") return undefined;
-      const t = raw as {
-        total?: number;
-        input?: number;
-        output?: number;
-        reasoning?: number;
-        cache?: { read?: number; write?: number };
-      };
-      const input = typeof t.input === "number" ? t.input : undefined;
-      const output = typeof t.output === "number" ? t.output : undefined;
-      const reasoning = typeof t.reasoning === "number" ? t.reasoning : undefined;
-      const cacheRead = typeof t.cache?.read === "number" ? t.cache.read : undefined;
-      const cacheWrite = typeof t.cache?.write === "number" ? t.cache.write : undefined;
-      const total =
-        typeof t.total === "number"
-          ? t.total
-          : input !== undefined || output !== undefined
-            ? (input ?? 0) + (output ?? 0)
-            : undefined;
-      if (
-        input === undefined &&
-        output === undefined &&
-        reasoning === undefined &&
-        cacheRead === undefined &&
-        cacheWrite === undefined &&
-        total === undefined
-      ) {
-        return undefined;
+    const flush = () => {
+      const visible: MessageView[] = [toMessageView(userEcho)];
+      for (const msg of messages.values()) {
+        // Server-side user messages are tracked for metadata (title) but not echoed —
+        // the local userEcho already represents the user's submission until invalidateAll().
+        if (msg.role === "user") continue;
+        if (shouldEmit(msg)) visible.push(toMessageView(msg));
       }
-      return { input, output, reasoning, cacheRead, cacheWrite, total };
+      writeStreaming(conversationId, visible);
     };
+    flush();
 
-    const shouldEmit = (id: string): boolean => {
-      if ((textById.get(id) ?? "").trim().length > 0) return true;
-      if ((reasoningById.get(id) ?? "").trim().length > 0) return true;
-      const tc = toolsById.get(id);
-      if (tc && tc.size > 0) return true;
-      return isTerminalFinish(finishById.get(id));
-    };
-
-    const emit = (id: string, role: MessageView["role"]) => {
-      const info = infoById.get(id);
-      upsertStreaming(conversationId, {
-        id,
-        role,
-        text: textById.get(id) ?? "",
-        reasoning: reasoningById.get(id) ?? "",
-        toolCalls: Array.from((toolsById.get(id) ?? new Map()).values()),
-        finish: finishById.get(id),
-        modelID: info?.modelID,
-        providerID: info?.providerID,
-        tokens: info?.tokens,
-        createdAt: info?.createdAt,
-      });
-    };
-
-    const upsertTool = (id: string, tool: ToolCallView) => {
-      const map = toolsById.get(id) ?? new Map<string, ToolCallView>();
-      const existing = map.get(tool.id);
-      map.set(tool.id, { ...(existing ?? {}), ...tool });
-      toolsById.set(id, map);
+    const ensureMessage = (id: string, role: MessageView["role"]): StreamingMessage => {
+      const existing = messages.get(id);
+      if (existing) {
+        if (existing.role !== role) existing.role = role;
+        return existing;
+      }
+      const created = emptyMessage(id, role);
+      messages.set(id, created);
+      return created;
     };
 
     try {
@@ -217,71 +171,57 @@ function createChatStore() {
             }
           }
 
-          roleById.set(id, role);
-          if (!textById.has(id)) textById.set(id, "");
-          if (!toolsById.has(id)) toolsById.set(id, new Map());
-          finishById.set(id, data.info?.finish);
-          infoById.set(id, {
-            modelID: data.info?.modelID,
-            providerID: data.info?.providerID,
-            tokens: extractTokens(data.info?.tokens),
-            createdAt:
-              typeof data.info?.time?.created === "number" ? data.info.time.created : undefined,
-          });
-
-          if ((role === "assistant" || role === "system") && shouldEmit(id)) emit(id, role);
+          const msg = ensureMessage(id, role);
+          msg.finish = data.info?.finish;
+          msg.modelID = data.info?.modelID;
+          msg.providerID = data.info?.providerID;
+          msg.tokens = extractTokens(data.info?.tokens);
+          msg.createdAt =
+            typeof data.info?.time?.created === "number" ? data.info.time.created : undefined;
         } else if (env.event === "message.part.updated") {
           const data = env.data as {
             delta?: string;
-            part?: { messageID?: string; type?: string; text?: string };
-          };
-          const id = data.part?.messageID;
-          if (!id) continue;
-
-          if (data.part?.type === "text") {
-            if (typeof data.delta === "string" && data.delta.length > 0) {
-              textById.set(id, `${textById.get(id) ?? ""}${data.delta}`);
-            } else if (typeof data.part.text === "string") {
-              textById.set(id, data.part.text);
-            }
-          } else if (data.part?.type === "reasoning") {
-            if (typeof data.delta === "string" && data.delta.length > 0) {
-              reasoningById.set(id, `${reasoningById.get(id) ?? ""}${data.delta}`);
-            } else if (typeof data.part.text === "string") {
-              reasoningById.set(id, data.part.text);
-            }
-          } else if (data.part?.type === "tool") {
-            const tp = data.part as {
+            part?: {
+              messageID?: string;
+              type?: string;
+              text?: string;
               id?: string;
               callID?: string;
               tool?: string;
-              state?: {
-                status?: ToolCallView["status"];
-                input?: unknown;
-                output?: string;
-                error?: string;
-              };
+              state?: { status?: ToolCallView["status"]; input?: unknown; output?: string; error?: string };
             };
-            const toolId = tp.callID ?? tp.id ?? `tool-${Date.now()}`;
-            upsertTool(id, {
-              id: toolId,
-              name: tp.tool ?? "tool",
-              status: tp.state?.status ?? "running",
-              input: tp.state?.input !== undefined ? JSON.stringify(tp.state.input) : undefined,
-              output: tp.state?.output,
-              error: tp.state?.error,
-            });
-          } else continue;
+          };
+          const part = data.part;
+          const id = part?.messageID;
+          if (!id || !part) continue;
+          const msg = messages.get(id);
+          if (!msg) continue;
 
-          const role = roleById.get(id);
-          if ((role === "assistant" || role === "system") && shouldEmit(id)) emit(id, role);
+          if (part.type === "text") {
+            if (typeof data.delta === "string" && data.delta.length > 0) {
+              msg.text += data.delta;
+            } else if (typeof part.text === "string") {
+              msg.text = part.text;
+            }
+          } else if (part.type === "reasoning") {
+            if (typeof data.delta === "string" && data.delta.length > 0) {
+              msg.reasoning = (msg.reasoning ?? "") + data.delta;
+            } else if (typeof part.text === "string") {
+              msg.reasoning = part.text;
+            }
+          } else if (part.type === "tool") {
+            const tool = toToolCallView(part, `tool-${Date.now()}`);
+            msg.toolCallsById[tool.id] = { ...msg.toolCallsById[tool.id], ...tool };
+          } else {
+            continue;
+          }
         } else if (env.event === "message.part.delta") {
           const data = env.data as { id?: string; messageID?: string; delta?: string };
           const id = data.messageID ?? data.id;
           if (!id || !data.delta) continue;
-          textById.set(id, `${textById.get(id) ?? ""}${data.delta}`);
-          const role = roleById.get(id);
-          if ((role === "assistant" || role === "system") && shouldEmit(id)) emit(id, role);
+          const msg = messages.get(id);
+          if (!msg) continue;
+          msg.text += data.delta;
         } else if (env.event === "permission.asked") {
           upsertPendingRequest({ type: "permission", request: env.data });
         } else if (env.event === "question.asked") {
@@ -296,21 +236,21 @@ function createChatStore() {
         } else if (env.event === "command.executed") {
           const data = env.data as { name?: string; arguments?: string; messageID?: string };
           if (!data.messageID || !data.name) continue;
+          const msg = messages.get(data.messageID);
+          if (!msg) continue;
           const cmdId = `cmd:${data.name}:${data.arguments ?? ""}`;
-          upsertTool(data.messageID, {
+          msg.toolCallsById[cmdId] = {
             id: cmdId,
             name: data.name,
             status: "executed",
             input: data.arguments,
-          });
-          const role = roleById.get(data.messageID);
-          if ((role === "assistant" || role === "system") && shouldEmit(data.messageID)) {
-            emit(data.messageID, role);
-          }
+          };
         } else if (env.event === "error") {
           const data = env.data as { message?: string };
           throw new Error(data.message ?? "Stream error");
         }
+
+        flush();
       }
       succeeded = true;
     } catch (err) {

@@ -1,7 +1,7 @@
 import { Elysia, t } from "elysia";
-import { db } from "$lib/server/db/client";
 import { opencodeServer } from "$lib/server/opencode/supervisor";
 import { requireAuth } from "$lib/server/auth";
+import { requireConversation } from "$lib/server/conversations";
 import {
   rejectQuestion as rejectQuestionService,
   replyPermission as replyPermissionService,
@@ -26,13 +26,7 @@ export const requestsRoute = new Elysia({ prefix: "/api/conversations" })
       requireAuth(context);
       const { id } = context.params;
 
-      const conv = await db.query.conversation.findFirst({
-        where: (fields, { eq }) => eq(fields.id, id),
-      });
-      if (!conv) {
-        context.set.status = 404;
-        return { error: "Conversation not found" };
-      }
+      const conv = await requireConversation(id);
 
       const { client } = await opencodeServer.conversationClient(id);
       const [{ data: permissions, error: permError }, { data: questions, error: questionError }] =

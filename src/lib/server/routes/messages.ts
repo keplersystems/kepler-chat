@@ -4,6 +4,7 @@ import { conversation, conversationMessageModel } from "$lib/server/db/schema/op
 import { eq } from "drizzle-orm";
 import { opencodeServer } from "$lib/server/opencode/supervisor";
 import { requireAuth } from "$lib/server/auth";
+import { requireConversation } from "$lib/server/conversations";
 import type { Event, FilePartInput, TextPartInput } from "@opencode-ai/sdk/v2";
 import { basename } from "node:path";
 import { pathToFileURL } from "node:url";
@@ -15,7 +16,6 @@ import {
 import {
   getConversationInputPath,
 } from "$lib/server/paths";
-import { HttpError } from "$lib/server/http-error";
 import {
   hasProviderModel,
   type ProviderModelCatalog,
@@ -110,13 +110,7 @@ export const messagesRoute = new Elysia({ prefix: "/api/conversations" })
       requireAuth(context);
       const { id } = context.params;
 
-      const conv = await db.query.conversation.findFirst({
-        where: (fields, { eq }) => eq(fields.id, id),
-      });
-
-      if (!conv) {
-        throw new HttpError(404, "Conversation not found");
-      }
+      const conv = await requireConversation(id);
 
       const { client } = await opencodeServer.conversationClient(id);
       const { data: messages, error } = await client.session.messages({
@@ -147,13 +141,7 @@ export const messagesRoute = new Elysia({ prefix: "/api/conversations" })
       const { id } = context.params;
       const { text, model, attachments = [] } = context.body;
 
-      const conv = await db.query.conversation.findFirst({
-        where: (fields, { eq }) => eq(fields.id, id),
-      });
-
-      if (!conv) {
-        throw new HttpError(404, "Conversation not found");
-      }
+      const conv = await requireConversation(id);
 
       const { client } = await opencodeServer.conversationClient(id);
       const { data: providerCatalog, error: providerCatalogError } =

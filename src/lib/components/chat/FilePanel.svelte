@@ -3,6 +3,13 @@
   import * as Dialog from '$lib/components/ui/dialog';
   import * as DropdownMenu from '$lib/components/ui/dropdown-menu';
   import { downloadFileUrl } from '$lib/api';
+  import type { Component } from 'svelte';
+  import DownloadIcon from '@lucide/svelte/icons/download';
+  import EyeIcon from '@lucide/svelte/icons/eye';
+  import FileIcon from '@lucide/svelte/icons/file';
+  import FileCodeIcon from '@lucide/svelte/icons/file-code';
+  import ImageIcon from '@lucide/svelte/icons/image';
+  import MoreHorizontalIcon from '@lucide/svelte/icons/more-horizontal';
 
   interface Props {
     conversationId: string;
@@ -89,46 +96,27 @@
     }
   }
 
-  function getFileIcon(path: string) {
-    const ext = path.split('.').pop()?.toLowerCase();
-    if (['js', 'ts', 'jsx', 'tsx', 'py', 'rb', 'go', 'rs', 'java', 'cpp', 'c', 'h'].includes(ext || '')) {
-      return 'code';
-    } else if (['md', 'txt', 'json', 'yaml', 'yml', 'xml'].includes(ext || '')) {
-      return 'text';
-    } else if (['png', 'jpg', 'jpeg', 'gif', 'svg', 'webp'].includes(ext || '')) {
-      return 'image';
-    } else if (['pdf', 'doc', 'docx', 'xls', 'xlsx', 'ppt', 'pptx'].includes(ext || '')) {
-      return 'document';
-    }
-    return 'file';
+  const codeExts = new Set(['js', 'ts', 'jsx', 'tsx', 'py', 'rb', 'go', 'rs', 'java', 'cpp', 'c', 'h']);
+  const imageExts = new Set(['png', 'jpg', 'jpeg', 'gif', 'svg', 'webp']);
+
+  function getFileIcon(path: string): Component {
+    const ext = path.split('.').pop()?.toLowerCase() ?? '';
+    if (codeExts.has(ext)) return FileCodeIcon;
+    if (imageExts.has(ext)) return ImageIcon;
+    return FileIcon;
   }
 </script>
 
 {#if files.length > 0}
   <div class="h-full space-y-0.5 overflow-y-auto px-2 py-2">
     {#each files as file (file.path)}
+      {@const FileIconComponent = getFileIcon(file.path)}
       <div class="group flex items-center gap-2 rounded-md px-1 py-1 text-sm text-sidebar-foreground/80 transition-colors hover:bg-sidebar-accent hover:text-sidebar-accent-foreground">
         <button
           onclick={() => previewFileContent(file)}
           class="flex min-w-0 flex-1 items-center gap-2 rounded-md px-1 py-0.5 text-left"
         >
-          {#if getFileIcon(file.path) === 'code'}
-            <svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" class="opacity-60">
-              <polyline points="16 18 22 12 16 6" />
-              <polyline points="8 6 2 12 8 18" />
-            </svg>
-          {:else if getFileIcon(file.path) === 'image'}
-            <svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" class="opacity-60">
-              <rect width="18" height="18" x="3" y="3" rx="2" ry="2" />
-              <circle cx="9" cy="9" r="2" />
-              <path d="m21 15-3.086-3.086a2 2 0 0 0-2.828 0L6 21" />
-            </svg>
-          {:else}
-            <svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" class="opacity-60">
-              <path d="M15 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V7Z" />
-              <path d="M14 2v4a2 2 0 0 0 2 2h4" />
-            </svg>
-          {/if}
+          <FileIconComponent size={14} class="opacity-60" />
           <span class="flex-1 truncate">{getFileName(file.path)}</span>
           <span class="text-xs opacity-50">{formatSize(file.size)}</span>
         </button>
@@ -142,10 +130,7 @@
             class="rounded-md p-1.5 hover:bg-sidebar-accent"
             aria-label={`Preview ${getFileName(file.path)}`}
           >
-            <svg xmlns="http://www.w3.org/2000/svg" width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
-              <path d="M2.062 12.348a1 1 0 0 1 0-.696 10.75 10.75 0 0 1 19.876 0 1 1 0 0 1 0 .696 10.75 10.75 0 0 1-19.876 0" />
-              <circle cx="12" cy="12" r="3" />
-            </svg>
+            <EyeIcon size={13} />
           </button>
           <a
             href={downloadFileUrl(conversationId, file.path, 'output')}
@@ -154,22 +139,14 @@
             class="rounded-md p-1.5 hover:bg-sidebar-accent"
             aria-label={`Download ${getFileName(file.path)}`}
           >
-            <svg xmlns="http://www.w3.org/2000/svg" width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
-              <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4" />
-              <polyline points="7 10 12 15 17 10" />
-              <line x1="12" x2="12" y1="15" y2="3" />
-            </svg>
+            <DownloadIcon size={13} />
           </a>
           <DropdownMenu.Root>
             <DropdownMenu.Trigger
               class="rounded-md p-1.5 hover:bg-sidebar-accent"
               aria-label={`More actions for ${getFileName(file.path)}`}
             >
-              <svg xmlns="http://www.w3.org/2000/svg" width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
-                <circle cx="12" cy="12" r="1" />
-                <circle cx="19" cy="12" r="1" />
-                <circle cx="5" cy="12" r="1" />
-              </svg>
+              <MoreHorizontalIcon size={13} />
             </DropdownMenu.Trigger>
             <DropdownMenu.Content align="end">
               <DropdownMenu.Item onSelect={() => copyText(file.path)}>

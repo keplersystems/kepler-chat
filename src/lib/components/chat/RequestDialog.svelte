@@ -1,6 +1,7 @@
 <script lang="ts">
   import { enhance } from "$app/forms";
   import type { PendingRequestDTO } from "$lib/contracts";
+  import { getRequestId } from "$lib/messages";
   import * as Dialog from "$lib/components/ui/dialog";
   import { Button } from "$lib/components/ui/button";
 
@@ -12,17 +13,8 @@
 
   let answerText = $state("");
 
-  const requestId = $derived(extractRequestId(request));
+  const requestId = $derived(request ? getRequestId(request.request) : null);
   const isOpen = $derived(request !== null);
-
-  function extractRequestId(r: PendingRequestDTO | null): string | null {
-    if (!r) return null;
-    const payload = r.request as { id?: unknown; requestID?: unknown; requestId?: unknown };
-    if (typeof payload?.id === "string" && payload.id.length > 0) return payload.id;
-    if (typeof payload?.requestID === "string" && payload.requestID.length > 0) return payload.requestID;
-    if (typeof payload?.requestId === "string" && payload.requestId.length > 0) return payload.requestId;
-    return null;
-  }
 
   $effect(() => {
     void request;

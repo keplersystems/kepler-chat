@@ -6,6 +6,13 @@
   import * as DropdownMenu from "$lib/components/ui/dropdown-menu";
   import * as Tooltip from "$lib/components/ui/tooltip";
   import { ScrollArea } from "$lib/components/ui/scroll-area";
+  import ChevronLeftIcon from "@lucide/svelte/icons/chevron-left";
+  import ChevronRightIcon from "@lucide/svelte/icons/chevron-right";
+  import LogOutIcon from "@lucide/svelte/icons/log-out";
+  import MessageSquareIcon from "@lucide/svelte/icons/message-square";
+  import MoreHorizontalIcon from "@lucide/svelte/icons/more-horizontal";
+  import PlusIcon from "@lucide/svelte/icons/plus";
+  import SettingsIcon from "@lucide/svelte/icons/settings";
 
   interface Props {
     conversations: ConversationDTO[];
@@ -36,9 +43,7 @@
           class="rounded-md p-2 text-sidebar-foreground hover:bg-sidebar-accent"
           aria-label="Expand sidebar"
         >
-          <svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
-            <path d="m9 18 6-6-6-6" />
-          </svg>
+          <ChevronRightIcon size={14} />
         </Tooltip.Trigger>
         <Tooltip.Content>Expand sidebar</Tooltip.Content>
       </Tooltip.Root>
@@ -55,10 +60,7 @@
                 class="rounded-md p-2 text-sidebar-foreground hover:bg-sidebar-accent"
                 aria-label="New chat"
               >
-                <svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
-                  <path d="M5 12h14" />
-                  <path d="M12 5v14" />
-                </svg>
+                <PlusIcon size={14} />
               </button>
             </form>
           {/snippet}
@@ -75,9 +77,7 @@
           class="rounded-md p-1.5 text-sidebar-foreground/70 hover:bg-sidebar-accent hover:text-sidebar-foreground"
           aria-label="Collapse sidebar"
         >
-          <svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
-            <path d="m15 18-6-6 6-6" />
-          </svg>
+          <ChevronLeftIcon size={14} />
         </Tooltip.Trigger>
         <Tooltip.Content>Collapse sidebar</Tooltip.Content>
       </Tooltip.Root>
@@ -87,10 +87,7 @@
       <form method="POST" action="/chat?/create" use:enhance>
         <input type="hidden" name="title" value="New Chat" />
         <Button type="submit" variant="outline" class="w-full justify-start gap-2">
-          <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
-            <path d="M5 12h14" />
-            <path d="M12 5v14" />
-          </svg>
+          <PlusIcon size={16} />
           New chat
         </Button>
       </form>
@@ -104,9 +101,7 @@
               href={`/chat/${conversation.id}`}
               class="flex min-w-0 flex-1 items-center gap-2 rounded-md px-2 py-2 text-sm text-sidebar-foreground"
             >
-              <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" class="shrink-0 opacity-60">
-                <path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z" />
-              </svg>
+              <MessageSquareIcon size={16} class="shrink-0 opacity-60" />
               <span class="flex-1 truncate text-left">{conversation.title}</span>
             </a>
 
@@ -115,11 +110,7 @@
                 class="rounded-md p-1.5 text-sidebar-foreground opacity-0 transition-opacity hover:bg-sidebar-accent focus-visible:opacity-100 data-[state=open]:opacity-100 group-hover:opacity-100"
                 aria-label={`Open menu for ${conversation.title}`}
               >
-                <svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
-                  <circle cx="12" cy="12" r="1" />
-                  <circle cx="19" cy="12" r="1" />
-                  <circle cx="5" cy="12" r="1" />
-                </svg>
+                <MoreHorizontalIcon size={14} />
               </DropdownMenu.Trigger>
               <DropdownMenu.Content align="end">
                 <DropdownMenu.Item disabled>Rename</DropdownMenu.Item>
@@ -159,10 +150,7 @@
                   class="rounded-md p-1.5 text-sidebar-foreground opacity-60 hover:bg-sidebar-accent hover:opacity-100"
                   aria-label="Settings"
                 >
-                  <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
-                    <path d="M12.22 2h-.44a2 2 0 0 0-2 2v.18a2 2 0 0 1-1 1.73l-.43.25a2 2 0 0 1-2 0l-.15-.08a2 2 0 0 0-2.73.73l-.22.38a2 2 0 0 0 .73 2.73l.15.1a2 2 0 0 1 1 1.72v.51a2 2 0 0 1-1 1.74l-.15.09a2 2 0 0 0-.73 2.73l.22.38a2 2 0 0 0 2.73.73l.15-.08a2 2 0 0 1 2 0l.43.25a2 2 0 0 1 1 1.73V20a2 2 0 0 0 2 2h.44a2 2 0 0 0 2-2v-.18a2 2 0 0 1 1-1.73l.43-.25a2 2 0 0 1 2 0l.15.08a2 2 0 0 0 2.73-.73l.22-.39a2 2 0 0 0-.73-2.73l-.15-.08a2 2 0 0 1-1-1.74v-.5a2 2 0 0 1 1-1.74l.15-.09a2 2 0 0 0 .73-2.73l-.22-.38a2 2 0 0 0-2.73-.73l-.15.08a2 2 0 0 1-2 0l-.43-.25a2 2 0 0 1-1-1.73V4a2 2 0 0 0-2-2z" />
-                    <circle cx="12" cy="12" r="3" />
-                  </svg>
+                  <SettingsIcon size={16} />
                 </a>
               {/snippet}
             </Tooltip.Trigger>
@@ -178,11 +166,7 @@
                     class="rounded-md p-1.5 text-sidebar-foreground opacity-60 hover:bg-sidebar-accent hover:opacity-100"
                     aria-label="Sign out"
                   >
-                    <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
-                      <path d="M9 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h4" />
-                      <polyline points="16 17 21 12 16 7" />
-                      <line x1="21" x2="9" y1="12" y2="12" />
-                    </svg>
+                    <LogOutIcon size={16} />
                   </button>
                 </form>
               {/snippet}

@@ -1,16 +1,20 @@
 <script lang="ts">
   import type { MessageView } from "$lib/state/chat.svelte";
+  import { isAbnormalFinish } from "$lib/messages";
   import * as Collapsible from "$lib/components/ui/collapsible";
   import * as DropdownMenu from "$lib/components/ui/dropdown-menu";
   import * as Tooltip from "$lib/components/ui/tooltip";
   import ProviderLogo from "$lib/components/ui/ProviderLogo.svelte";
   import AtomIcon from "@lucide/svelte/icons/atom";
+  import BotIcon from "@lucide/svelte/icons/bot";
+  import CheckIcon from "@lucide/svelte/icons/check";
   import ChevronRightIcon from "@lucide/svelte/icons/chevron-right";
   import CopyIcon from "@lucide/svelte/icons/copy";
   import GitBranchIcon from "@lucide/svelte/icons/git-branch";
   import MoreHorizontalIcon from "@lucide/svelte/icons/more-horizontal";
   import PencilIcon from "@lucide/svelte/icons/pencil";
   import RefreshCwIcon from "@lucide/svelte/icons/refresh-cw";
+  import SettingsIcon from "@lucide/svelte/icons/settings";
   import SigmaIcon from "@lucide/svelte/icons/sigma";
   import Trash2Icon from "@lucide/svelte/icons/trash-2";
 
@@ -32,13 +36,7 @@
   const isUser = $derived(message.role === "user");
   const isSystem = $derived(message.role === "system");
   const isAssistant = $derived(message.role === "assistant");
-  // Only surface finish reasons that indicate something abnormal (truncation, filter, error).
-  // "stop" is normal completion and would just be visual noise.
-  const displayFinish = $derived(
-    message.finish && !["stop", "tool-calls", "tool_calls", "unknown"].includes(message.finish)
-      ? message.finish
-      : null,
-  );
+  const displayFinish = $derived(isAbnormalFinish(message.finish) ? message.finish : null);
   const displayReasoning = $derived(message.reasoning?.trim() ?? "");
   const displayToolCalls = $derived(message.toolCalls ?? []);
   const totalTokens = $derived(
@@ -80,19 +78,9 @@
   {#if !isUser}
     <div class="flex h-8 w-8 shrink-0 items-center justify-center text-muted-foreground" aria-hidden="true">
       {#if isSystem}
-        <svg xmlns="http://www.w3.org/2000/svg" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round">
-          <circle cx="12" cy="12" r="3" />
-          <path d="M12 1v6m0 6v6m4.22-10.22l4.24-4.24M6.34 17.66l-4.24 4.24M23 12h-6m-6 0H1m20.24 4.24l-4.24-4.24M6.34 6.34L2.1 2.1" />
-        </svg>
+        <SettingsIcon size={18} strokeWidth={1.75} />
       {:else}
-        <svg xmlns="http://www.w3.org/2000/svg" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round">
-          <path d="M12 8V4H8" />
-          <rect width="16" height="12" x="4" y="8" rx="2" />
-          <path d="M2 14h2" />
-          <path d="M20 14h2" />
-          <path d="M15 13v2" />
-          <path d="M9 13v2" />
-        </svg>
+        <BotIcon size={18} strokeWidth={1.75} />
       {/if}
     </div>
   {/if}
@@ -230,9 +218,7 @@
               class="rounded-md p-1 hover:bg-accent hover:text-accent-foreground"
               aria-label="Edit message"
             >
-              <svg xmlns="http://www.w3.org/2000/svg" width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
-                <path d="M17 3a2.85 2.83 0 1 1 4 4L7.5 20.5 2 22l1.5-5.5Z" />
-              </svg>
+              <PencilIcon size={13} />
             </Tooltip.Trigger>
             <Tooltip.Content>Edit</Tooltip.Content>
           </Tooltip.Root>
@@ -243,14 +229,9 @@
               aria-label="Copy message"
             >
               {#if copied}
-                <svg xmlns="http://www.w3.org/2000/svg" width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round">
-                  <path d="M20 6 9 17l-5-5" />
-                </svg>
+                <CheckIcon size={13} strokeWidth={2.5} />
               {:else}
-                <svg xmlns="http://www.w3.org/2000/svg" width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
-                  <rect width="14" height="14" x="8" y="8" rx="2" ry="2" />
-                  <path d="M4 16c-1.1 0-2-.9-2-2V4c0-1.1.9-2 2-2h10c1.1 0 2 .9 2 2" />
-                </svg>
+                <CopyIcon size={13} />
               {/if}
             </Tooltip.Trigger>
             <Tooltip.Content>{copied ? "Copied" : "Copy"}</Tooltip.Content>
@@ -262,12 +243,7 @@
                 class="rounded-md p-1 hover:bg-accent hover:text-accent-foreground"
                 aria-label="Branch from this message"
               >
-                <svg xmlns="http://www.w3.org/2000/svg" width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
-                  <line x1="6" x2="6" y1="3" y2="15" />
-                  <circle cx="18" cy="6" r="3" />
-                  <circle cx="6" cy="18" r="3" />
-                  <path d="M18 9a9 9 0 0 1-9 9" />
-                </svg>
+                <GitBranchIcon size={13} />
               </Tooltip.Trigger>
               <Tooltip.Content>Branch</Tooltip.Content>
             </Tooltip.Root>

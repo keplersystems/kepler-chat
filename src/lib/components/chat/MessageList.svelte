@@ -16,7 +16,7 @@
   let { messages, isStreaming = false, onCopy, onRegenerate, onDelete, onEdit, onBranch }: Props =
     $props();
 
-  let scrollViewport: HTMLElement | null = $state(null);
+  let viewport: HTMLElement | null = $state(null);
   const mergedMessages = $derived.by(() => {
     const result: MessageView[] = [];
 
@@ -52,14 +52,19 @@
   });
 
   $effect(() => {
-    if (scrollViewport && mergedMessages.length > 0) {
-      scrollViewport.scrollTop = scrollViewport.scrollHeight;
-    }
+    if (!viewport) return;
+    // Track streaming content length so deltas trigger scroll, not just message count.
+    const signal = mergedMessages.reduce(
+      (n, m) => n + m.text.length + (m.reasoning?.length ?? 0),
+      0,
+    );
+    void signal;
+    viewport.scrollTop = viewport.scrollHeight;
   });
 </script>
 
-<ScrollArea class="flex-1">
-  <div bind:this={scrollViewport} class="flex flex-col gap-6 px-6 py-6">
+<ScrollArea class="flex-1" bind:viewportRef={viewport}>
+  <div class="flex flex-col gap-6 px-6 py-6">
     {#each mergedMessages as message (message.id)}
       <MessageBubble {message} {onCopy} {onRegenerate} {onDelete} {onEdit} {onBranch} />
     {/each}

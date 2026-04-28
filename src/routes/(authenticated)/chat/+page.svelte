@@ -3,6 +3,7 @@
   import type { ConversationDTO } from "$lib/contracts";
   import ChatLayout from "$lib/components/chat/ChatLayout.svelte";
   import { Button } from "$lib/components/ui/button";
+  import PlusIcon from "@lucide/svelte/icons/plus";
 
   interface Props {
     data: { conversations: ConversationDTO[] };
@@ -10,6 +11,12 @@
 
   const { data }: Props = $props();
   const localUser = { name: "Local" };
+
+  const promptSuggestions = [
+    { emoji: "💡", title: "Explain a concept", description: "Get help understanding any topic" },
+    { emoji: "💻", title: "Write code", description: "Generate or debug code" },
+    { emoji: "📊", title: "Analyze data", description: "Process and visualize data" },
+  ];
 </script>
 
 <ChatLayout conversations={data.conversations} user={localUser}>
@@ -24,63 +31,26 @@
     <form method="POST" action="?/create" use:enhance>
       <input type="hidden" name="title" value="New Chat" />
       <Button type="submit" size="lg" class="gap-2">
-        <svg
-          xmlns="http://www.w3.org/2000/svg"
-          width="20"
-          height="20"
-          viewBox="0 0 24 24"
-          fill="none"
-          stroke="currentColor"
-          stroke-width="2"
-          stroke-linecap="round"
-          stroke-linejoin="round"
-        >
-          <path d="M5 12h14" />
-          <path d="M12 5v14" />
-        </svg>
+        <PlusIcon size={20} />
         Start new chat
       </Button>
     </form>
 
     <div class="grid gap-4 pt-8 sm:grid-cols-2 lg:grid-cols-3">
-      <form method="POST" action="?/create" use:enhance>
-        <button
-          type="submit"
-          name="title"
-          value="Explain a concept"
-          class="w-full rounded-lg border bg-card p-4 text-left transition-colors hover:bg-accent hover:text-accent-foreground"
-        >
-          <div class="mb-2 text-2xl">💡</div>
-          <h3 class="font-semibold">Explain a concept</h3>
-          <p class="text-sm text-muted-foreground">Get help understanding any topic</p>
-        </button>
-      </form>
-
-      <form method="POST" action="?/create" use:enhance>
-        <button
-          type="submit"
-          name="title"
-          value="Write code"
-          class="w-full rounded-lg border bg-card p-4 text-left transition-colors hover:bg-accent hover:text-accent-foreground"
-        >
-          <div class="mb-2 text-2xl">💻</div>
-          <h3 class="font-semibold">Write code</h3>
-          <p class="text-sm text-muted-foreground">Generate or debug code</p>
-        </button>
-      </form>
-
-      <form method="POST" action="?/create" use:enhance>
-        <button
-          type="submit"
-          name="title"
-          value="Analyze data"
-          class="w-full rounded-lg border bg-card p-4 text-left transition-colors hover:bg-accent hover:text-accent-foreground"
-        >
-          <div class="mb-2 text-2xl">📊</div>
-          <h3 class="font-semibold">Analyze data</h3>
-          <p class="text-sm text-muted-foreground">Process and visualize data</p>
-        </button>
-      </form>
+      {#each promptSuggestions as suggestion (suggestion.title)}
+        <form method="POST" action="?/create" use:enhance>
+          <button
+            type="submit"
+            name="title"
+            value={suggestion.title}
+            class="w-full rounded-lg border bg-card p-4 text-left transition-colors hover:bg-accent hover:text-accent-foreground"
+          >
+            <div class="mb-2 text-2xl">{suggestion.emoji}</div>
+            <h3 class="font-semibold">{suggestion.title}</h3>
+            <p class="text-sm text-muted-foreground">{suggestion.description}</p>
+          </button>
+        </form>
+      {/each}
     </div>
   </div>
 </ChatLayout>

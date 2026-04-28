@@ -4,6 +4,7 @@ import { conversation } from "$lib/server/db/schema/opencode";
 import { eq } from "drizzle-orm";
 import { opencodeServer } from "$lib/server/opencode/supervisor";
 import { requireAuth } from "$lib/server/auth";
+import { requireConversation } from "$lib/server/conversations";
 import {
   hasProviderModel,
   type ProviderModelCatalog,
@@ -15,14 +16,7 @@ export const modelsRoute = new Elysia({ prefix: "/api/conversations" })
     async (context) => {
       requireAuth(context);
       const { id } = context.params;
-      const conv = await db.query.conversation.findFirst({
-        where: (fields, { eq }) => eq(fields.id, id),
-      });
-
-      if (!conv) {
-        context.set.status = 404;
-        return { error: "Conversation not found" };
-      }
+      const conv = await requireConversation(id);
 
       if (!conv.provider_id || !conv.model_id) {
         return { model: null };
@@ -52,14 +46,7 @@ export const modelsRoute = new Elysia({ prefix: "/api/conversations" })
       requireAuth(context);
       const { id } = context.params;
       const { providerID, modelID } = context.body;
-      const conv = await db.query.conversation.findFirst({
-        where: (fields, { eq }) => eq(fields.id, id),
-      });
-
-      if (!conv) {
-        context.set.status = 404;
-        return { error: "Conversation not found" };
-      }
+      await requireConversation(id);
 
       const { client } = await opencodeServer.conversationClient(id);
       const { data: providers, error } = await client.provider.list();

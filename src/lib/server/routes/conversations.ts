@@ -1,8 +1,11 @@
 import { Elysia, t } from "elysia";
 import { db } from "$lib/server/db/client";
 import { requireAuth } from "$lib/server/auth";
-import { createConversation, deleteConversation } from "$lib/server/conversations";
-import { HttpError } from "$lib/server/http-error";
+import {
+  createConversation,
+  deleteConversation,
+  requireConversation,
+} from "$lib/server/conversations";
 
 export const conversationsRoute = new Elysia({ prefix: "/api/conversations" })
   .get(
@@ -42,11 +45,7 @@ export const conversationsRoute = new Elysia({ prefix: "/api/conversations" })
     "/:id",
     async (context) => {
       requireAuth(context);
-      const conv = await db.query.conversation.findFirst({
-        where: (fields, { eq }) => eq(fields.id, context.params.id),
-      });
-      if (!conv) throw new HttpError(404, "Conversation not found");
-      return conv;
+      return requireConversation(context.params.id);
     },
     {
       params: t.Object({ id: t.String() }),

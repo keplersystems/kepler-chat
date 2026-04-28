@@ -1,5 +1,4 @@
 <script lang="ts">
-  import { onMount } from 'svelte';
   import type { Snippet } from 'svelte';
   import ConversationSidebar from './ConversationSidebar.svelte';
   import type { ConversationDTO } from '$lib/contracts';
@@ -12,19 +11,19 @@
   }
 
   let { children, conversations, currentConversationId, user }: Props = $props();
-  let isSidebarCollapsed = $state(false);
 
   const LEFT_SIDEBAR_STORAGE_KEY = 'kepler:chat:left-sidebar-collapsed';
 
-  onMount(() => {
-    const stored = window.localStorage.getItem(LEFT_SIDEBAR_STORAGE_KEY);
-    if (stored === 'true') {
-      isSidebarCollapsed = true;
-    }
+  let isSidebarCollapsed = $state(false);
+  let hydrated = $state(false);
+
+  $effect(() => {
+    isSidebarCollapsed = window.localStorage.getItem(LEFT_SIDEBAR_STORAGE_KEY) === 'true';
+    hydrated = true;
   });
 
   $effect(() => {
-    if (typeof window === 'undefined') return;
+    if (!hydrated) return;
     window.localStorage.setItem(LEFT_SIDEBAR_STORAGE_KEY, String(isSidebarCollapsed));
   });
 </script>

@@ -1,6 +1,6 @@
 import { Elysia, t } from "elysia";
 import { readFile, writeFile } from "node:fs/promises";
-import { db } from "$lib/server/db/client";
+import { requireConversation } from "$lib/server/conversations";
 import type {
   FileScope,
   ListOutputFilesResponse,
@@ -39,13 +39,7 @@ export const filesRoute = new Elysia({ prefix: "/api/conversations" })
       const { id } = context.params;
       const { file } = context.body;
 
-      const conversation = await db.query.conversation.findFirst({
-        where: (fields, { eq }) => eq(fields.id, id),
-      });
-      if (!conversation) {
-        context.set.status = 404;
-        return { error: "Conversation not found" };
-      }
+      await requireConversation(id);
 
       await provisionConversationDirectories(id);
       if (!(file instanceof File)) {
@@ -91,13 +85,7 @@ export const filesRoute = new Elysia({ prefix: "/api/conversations" })
       const { id } = context.params;
       const { prefix } = context.query;
 
-      const conversation = await db.query.conversation.findFirst({
-        where: (fields, { eq }) => eq(fields.id, id),
-      });
-      if (!conversation) {
-        context.set.status = 404;
-        return { error: "Conversation not found" };
-      }
+      await requireConversation(id);
 
       await provisionConversationDirectories(id);
       const outputPath = getConversationOutputPath(id);
@@ -148,13 +136,7 @@ export const filesRoute = new Elysia({ prefix: "/api/conversations" })
       const filePath = (context.params as { id: string; "*": string })["*"];
       const { scope } = context.query;
 
-      const conversation = await db.query.conversation.findFirst({
-        where: (fields, { eq }) => eq(fields.id, id),
-      });
-      if (!conversation) {
-        context.set.status = 404;
-        return { error: "Conversation not found" };
-      }
+      await requireConversation(id);
 
       if (!filePath || filePath.trim().length === 0) {
         context.set.status = 400;

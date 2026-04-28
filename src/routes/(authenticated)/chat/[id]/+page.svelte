@@ -1,5 +1,6 @@
 <script lang="ts">
   import type { ConversationDTO, PendingRequestDTO } from "$lib/contracts";
+  import { browser } from "$app/environment";
   import { api } from "$lib/api";
   import { chat, toMessageViewList } from "$lib/state/chat.svelte";
   import type { ModelSelection, Provider } from "$lib/types";
@@ -9,6 +10,7 @@
   import RequestDialog from "$lib/components/chat/RequestDialog.svelte";
   import OutputFilesSidebar from "$lib/components/chat/OutputFilesSidebar.svelte";
   import * as Tooltip from "$lib/components/ui/tooltip";
+  import RefreshCwIcon from "@lucide/svelte/icons/refresh-cw";
 
   interface Props {
     data: {
@@ -54,13 +56,13 @@
   });
 
   $effect(() => {
-    if (typeof window === "undefined") return;
+    if (!browser) return;
     const stored = window.localStorage.getItem(`${FILE_PANEL_STORAGE_PREFIX}${conversationId}`);
     isFilesPanelCollapsed = stored === "true";
   });
 
   $effect(() => {
-    if (typeof window === "undefined") return;
+    if (!browser) return;
     window.localStorage.setItem(
       `${FILE_PANEL_STORAGE_PREFIX}${conversationId}`,
       String(isFilesPanelCollapsed),
@@ -166,12 +168,7 @@
               class="rounded-md p-2 text-muted-foreground hover:bg-accent hover:text-accent-foreground"
               aria-label="Refresh files"
             >
-              <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
-                <path d="M3 12a9 9 0 0 1 9-9 9.75 9.75 0 0 1 6.74 2.74L21 8" />
-                <path d="M21 3v5h-5" />
-                <path d="M21 12a9 9 0 0 1-9 9 9.75 9.75 0 0 1-6.74-2.74L3 16" />
-                <path d="M8 16H3v5" />
-              </svg>
+              <RefreshCwIcon size={16} />
             </Tooltip.Trigger>
             <Tooltip.Content>Refresh files</Tooltip.Content>
           </Tooltip.Root>
