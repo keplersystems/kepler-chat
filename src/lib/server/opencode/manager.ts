@@ -4,11 +4,12 @@ import {
 } from "@opencode-ai/sdk/v2";
 import { env } from "$lib/env";
 import { wrapCommandForSessionsRoot } from "$lib/server/opencode/sandbox";
-import { mkdir } from "node:fs/promises";
+import { mkdir, writeFile } from "node:fs/promises";
 import { resolve } from "node:path";
 import { spawn, type ChildProcessWithoutNullStreams } from "node:child_process";
 import { allocatePort, releasePort } from "./ports";
 import { loadProviderEnv } from "./provider-env";
+import { readPermissionSettings } from "$lib/server/permissions";
 
 interface ServerData {
   client: OpencodeClient;
@@ -20,6 +21,16 @@ interface ServerData {
 
 const OPENCODE_START_TIMEOUT_MS = 5000;
 const OPENCODE_STOP_TIMEOUT_MS = 5000;
+
+const BASE_INSTRUCTIONS = `# Workspace conventions
+
+Your working directory belongs to this conversation.
+
+- Files the user attached are in ./input — read them there, never modify them.
+- Use ./scratchpad for working notes, intermediate files, and experiments; the user never sees it.
+- Save every deliverable (documents, code, exports, reports) to ./output.
+- Everything else you create in the working directory is visible to the user.
+`;
 
 function getSessionsRoot(): string {
   return resolve(env.KEPLER_SESSIONS_PATH);
@@ -34,6 +45,7 @@ async function prepareServerDirectories(): Promise<{
   xdgCache: string;
   xdgConfig: string;
   xdgState: string;
+  tmpDir: string;
 }> {
   const sessionsRoot = getSessionsRoot();
   const opencodeRoot = getOpencodeRoot();
@@ -41,6 +53,7 @@ async function prepareServerDirectories(): Promise<{
   const xdgCache = resolve(opencodeRoot, "cache");
   const xdgConfig = resolve(opencodeRoot, "config");
   const xdgState = resolve(opencodeRoot, "state");
+  const tmpDir = resolve(opencodeRoot, "tmp");
 
   await Promise.all([
     mkdir(sessionsRoot, { recursive: true }),
@@ -48,9 +61,15 @@ async function prepareServerDirectories(): Promise<{
     mkdir(xdgCache, { recursive: true }),
     mkdir(xdgConfig, { recursive: true }),
     mkdir(xdgState, { recursive: true }),
+    mkdir(tmpDir, { recursive: true }),
   ]);
+  await writeFile(resolve(sessionsRoot, "AGENTS.md"), BASE_INSTRUCTIONS, { flag: "wx" }).catch(
+    (err) => {
+      if (err.code !== "EEXIST") throw err;
+    },
+  );
 
-  return { xdgData, xdgCache, xdgConfig, xdgState };
+  return { xdgData, xdgCache, xdgConfig, xdgState, tmpDir };
 }
 
 async function createOpencodeEnv(xdgPaths: {
@@ -58,6 +77,7 @@ async function createOpencodeEnv(xdgPaths: {
   xdgCache: string;
   xdgConfig: string;
   xdgState: string;
+  tmpDir: string;
 }): Promise<NodeJS.ProcessEnv> {
   const existingPermissionRaw = process.env.OPENCODE_PERMISSION;
   const permissionConfig = existingPermissionRaw
@@ -65,12 +85,7 @@ async function createOpencodeEnv(xdgPaths: {
     : {};
   const providerEnv = await loadProviderEnv();
 
-  permissionConfig.external_directory = "deny";
-  for (const tool of ["webfetch", "websearch", "codesearch"] as const) {
-    if (permissionConfig[tool] === undefined) {
-      permissionConfig[tool] = "ask";
-    }
-  }
+  Object.assign(permissionConfig, await readPermissionSettings());
 
   return {
     ...process.env,
@@ -79,6 +94,11 @@ async function createOpencodeEnv(xdgPaths: {
     XDG_CACHE_HOME: xdgPaths.xdgCache,
     XDG_CONFIG_HOME: xdgPaths.xdgConfig,
     XDG_STATE_HOME: xdgPaths.xdgState,
+    // The sandbox only permits writes under the sessions root; OpenCode
+    // resolves its scratch space from os.tmpdir() and spawns npm for plugin
+    // installs, which needs a writable cache.
+    TMPDIR: xdgPaths.tmpDir,
+    npm_config_cache: resolve(xdgPaths.tmpDir, "npm-cache"),
     OPENCODE_PERMISSION: JSON.stringify(permissionConfig),
   };
 }
@@ -192,6 +212,7 @@ async function spawnServer(options: {
     xdgCache: string;
     xdgConfig: string;
     xdgState: string;
+    tmpDir: string;
   };
 }): Promise<ServerData> {
   const sessionsRoot = getSessionsRoot();

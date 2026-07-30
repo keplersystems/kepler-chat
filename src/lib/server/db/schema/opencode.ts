@@ -8,12 +8,9 @@ import {
   uniqueIndex,
 } from "drizzle-orm/sqlite-core";
 
-export const conversation = sqliteTable("conversation", {
+export const project = sqliteTable("project", {
   id: text("id").primaryKey(),
-  opencode_session_id: text("opencode_session_id").notNull(),
-  title: text("title").notNull(),
-  provider_id: text("provider_id"),
-  model_id: text("model_id"),
+  name: text("name").notNull(),
   created_at: integer("created_at", { mode: "timestamp_ms" })
     .default(sql`(cast(unixepoch('subsecond') * 1000 as integer))`)
     .notNull(),
@@ -22,6 +19,39 @@ export const conversation = sqliteTable("conversation", {
     .$onUpdate(() => new Date())
     .notNull(),
 });
+
+export const media = sqliteTable("media", {
+  id: text("id").primaryKey(),
+  hash: text("hash").notNull().unique(),
+  filename: text("filename").notNull(),
+  mime_type: text("mime_type"),
+  size: integer("size").notNull(),
+  created_at: integer("created_at", { mode: "timestamp_ms" })
+    .default(sql`(cast(unixepoch('subsecond') * 1000 as integer))`)
+    .notNull(),
+});
+
+export const conversation = sqliteTable(
+  "conversation",
+  {
+    id: text("id").primaryKey(),
+    opencode_session_id: text("opencode_session_id").notNull(),
+    project_id: text("project_id").references(() => project.id, {
+      onDelete: "cascade",
+    }),
+    title: text("title").notNull(),
+    provider_id: text("provider_id"),
+    model_id: text("model_id"),
+    created_at: integer("created_at", { mode: "timestamp_ms" })
+      .default(sql`(cast(unixepoch('subsecond') * 1000 as integer))`)
+      .notNull(),
+    updated_at: integer("updated_at", { mode: "timestamp_ms" })
+      .default(sql`(cast(unixepoch('subsecond') * 1000 as integer))`)
+      .$onUpdate(() => new Date())
+      .notNull(),
+  },
+  (table) => [index("conversation_project_idx").on(table.project_id)],
+);
 
 export const providerCredential = sqliteTable("provider_credential", {
   provider_id: text("provider_id").primaryKey(),
@@ -84,7 +114,15 @@ export const providerEnvProfile = sqliteTable(
   ],
 );
 
-export const conversationRelations = relations(conversation, ({ many }) => ({
+export const projectRelations = relations(project, ({ many }) => ({
+  conversations: many(conversation),
+}));
+
+export const conversationRelations = relations(conversation, ({ one, many }) => ({
+  project: one(project, {
+    fields: [conversation.project_id],
+    references: [project.id],
+  }),
   messageModels: many(conversationMessageModel),
 }));
 

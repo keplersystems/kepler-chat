@@ -2,8 +2,11 @@ import { Elysia, t } from "elysia";
 import { db } from "$lib/server/db/client";
 import { requireAuth } from "$lib/server/auth";
 import {
+  branchConversation,
   createConversation,
   deleteConversation,
+  renameConversation,
+  revertConversation,
   requireConversation,
 } from "$lib/server/conversations";
 
@@ -28,16 +31,17 @@ export const conversationsRoute = new Elysia({ prefix: "/api/conversations" })
     "/",
     async (context) => {
       requireAuth(context);
-      return createConversation(context.body.title);
+      return createConversation(context.body.title, context.body.projectId ?? null);
     },
     {
       body: t.Object({
         title: t.String({ minLength: 1, maxLength: 255 }),
+        projectId: t.Optional(t.String({ minLength: 1 })),
       }),
       detail: {
         summary: "Create conversation",
         tags: ["Conversations"],
-        description: "Create a new conversation (OpenCode session)",
+        description: "Create a new conversation (OpenCode session), optionally inside a project",
       },
     },
   )
@@ -56,6 +60,57 @@ export const conversationsRoute = new Elysia({ prefix: "/api/conversations" })
       },
     },
   )
+  .post(
+    "/:id/branch",
+    async (context) => {
+      requireAuth(context);
+      return branchConversation(context.params.id, context.body.messageID);
+    },
+    {
+      params: t.Object({ id: t.String() }),
+      body: t.Object({ messageID: t.Optional(t.String({ minLength: 1 })) }),
+      detail: {
+        summary: "Branch conversation",
+        tags: ["Conversations"],
+        description:
+          "Fork a conversation (and its working directory) at a message into a new conversation",
+      },
+    },
+  )
+  .patch(
+    "/:id",
+    async (context) => {
+      requireAuth(context);
+      return renameConversation(context.params.id, context.body.title);
+    },
+    {
+      params: t.Object({ id: t.String() }),
+      body: t.Object({ title: t.String({ minLength: 1, maxLength: 255 }) }),
+      detail: {
+        summary: "Rename conversation",
+        tags: ["Conversations"],
+        description: "Rename a conversation and its OpenCode session",
+      },
+    },
+  )
+  .post(
+    "/:id/revert",
+    async (context) => {
+      requireAuth(context);
+      await revertConversation(context.params.id, context.body.messageID);
+      return { success: true };
+    },
+    {
+      params: t.Object({ id: t.String() }),
+      body: t.Object({ messageID: t.String({ minLength: 1 }) }),
+      detail: {
+        summary: "Revert conversation",
+        tags: ["Conversations"],
+        description:
+          "Revert the OpenCode session to just before a message; sending afterwards discards the reverted tail",
+      },
+    },
+  )
   .delete(
     "/:id",
     async (context) => {
@@ -69,6 +124,24 @@ export const conversationsRoute = new Elysia({ prefix: "/api/conversations" })
         summary: "Delete conversation",
         tags: ["Conversations"],
         description: "Delete a conversation, its OpenCode session, and files",
+      },
+    },
+  )
+  .delete(
+    "/",
+    async (context) => {
+      requireAuth(context);
+      for (const id of context.body.ids) {
+        await deleteConversation(id);
+      }
+      return { success: true, deleted: context.body.ids.length };
+    },
+    {
+      body: t.Object({ ids: t.Array(t.String({ minLength: 1 }), { minItems: 1, maxItems: 100 }) }),
+      detail: {
+        summary: "Delete conversations",
+        tags: ["Conversations"],
+        description: "Delete multiple conversations, their OpenCode sessions, and files",
       },
     },
   );

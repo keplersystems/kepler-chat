@@ -1,6 +1,6 @@
 import { OpencodeServerManager } from "$lib/server/opencode/manager";
 import type { OpencodeClient } from "@opencode-ai/sdk/v2";
-import { getConversationRoot } from "$lib/server/paths";
+import { getConversationRoot, type ConversationLocator } from "$lib/server/paths";
 
 interface OpencodeClientContext {
   client: OpencodeClient;
@@ -14,7 +14,9 @@ export const opencodeServer: {
   stop: () => Promise<void>;
   restart: () => Promise<void>;
   client: () => Promise<OpencodeClientContext>;
-  conversationClient: (conversationId: string) => Promise<OpencodeClientContext>;
+  conversationClient: (conversation: ConversationLocator) => Promise<OpencodeClientContext>;
+  directoryClient: (directory: string) => Promise<OpencodeClientContext>;
+  disposeDirectory: (directory: string) => Promise<void>;
 } = {
   start: async () => {
     await manager.start();
@@ -22,6 +24,13 @@ export const opencodeServer: {
   stop: () => manager.stop(),
   restart: () => manager.restart(),
   client: () => manager.getServerClient(),
-  conversationClient: (conversationId: string) =>
-    manager.clientForDirectory(getConversationRoot(conversationId)),
+  conversationClient: (conversation) =>
+    manager.clientForDirectory(getConversationRoot(conversation)),
+  directoryClient: (directory) => manager.clientForDirectory(directory),
+  /** Drop OpenCode's per-directory instance so config/skills/instructions are re-read. */
+  disposeDirectory: async (directory) => {
+    const { client } = await manager.getServerClient();
+    const { error } = await client.instance.dispose({ directory });
+    if (error) throw new Error(`Failed to dispose OpenCode instance for ${directory}`);
+  },
 };
