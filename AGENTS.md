@@ -1,6 +1,6 @@
 # Kepler Chat
 
-Single-user LLM chat application using one always-on OpenCode server as the agent backend.
+Single-user agentic chat application using one always-on OpenCode server as the agent backend. Features: projects (grouped conversations with inherited AGENTS.md/config/skills), MCP servers + OAuth connectors, skills management, artifact previews, markdown/shiki message rendering.
 
 ## Stack
 
@@ -14,10 +14,13 @@ Single-user LLM chat application using one always-on OpenCode server as the agen
 ## Architecture
 
 - One sandboxed OpenCode server for the application
-- Per-conversation directory isolation through the OpenCode SDK directory option
+- Per-conversation directory isolation through the OpenCode SDK directory option; projects nest conversation dirs under `projects/{id}/conversations/{id}` so project files (AGENTS.md, opencode.json, .opencode/skills) inherit via OpenCode's directory up-walk
+- **Filesystem is the source of truth** for everything OpenCode reads; the DB stores only grouping/titles/credentials. Project-scope config changes dispose instances; global-scope changes restart the server (OpenCode caches the global config layer process-wide — `global/dispose` does NOT flush it)
 - Supervisor boot/shutdown via SvelteKit `hooks.server.ts` (top-level await + SIGINT/SIGTERM handlers)
-- SSE streaming for real-time responses (raw `fetch` + `parseSSEStream` in the singleton `chat` store at `$lib/state/chat.svelte.ts`)
-- Server data flows top-down: `+layout.server.ts` (conversations) → `+page.server.ts` (per-route data) → page consumes `data` directly. Mutations call `invalidateAll()` to re-load.
+- SSE streaming for real-time responses (raw `fetch` + `parseSSEStream` in the singleton `chat` store at `$lib/state/chat.svelte.ts`); SSE payload types derive from the SDK `Event` union in `$lib/contracts.ts`
+- Messages render as ordered part views (`$lib/messages.ts`); markdown via marked-lexer → Svelte token renderer + shiki (`$lib/markdown`, `$lib/components/markdown`) — no `{@html}` for model output
+- Design system: tokens in `src/app.css` ("Kepler observatory": Night surfaces, Brass primary, Phosphor `--activity` reserved for live agent states), IBM Plex Sans/Mono, light+dark via `.dark` class + `$lib/state/theme.svelte.ts`. Semantic token utilities only; primitives in `$lib/components/ui`
+- Server data flows top-down: `+layout.server.ts` (conversations + projects) → `+page.server.ts` (per-route data) → page consumes `data` directly. Mutations call `invalidateAll()` to re-load.
 - Runtime/streaming state lives in the singleton store; **server data is never mirrored** in the store.
 
 See `SPEC.md` for full architecture documentation.
