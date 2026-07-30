@@ -74,21 +74,22 @@
   }
 </script>
 
-<div class="space-y-6">
-  <div>
-    <h1 class="text-2xl font-bold">Providers</h1>
-    <p class="text-muted-foreground mt-1">
-      Manage your AI provider credentials. You need to authenticate with at least one provider to send messages.
-    </p>
-  </div>
+<div class="space-y-8">
+  <p class="text-sm text-muted-foreground">
+    Manage your AI provider credentials. You need to authenticate with at least one provider to
+    send messages.
+  </p>
 
   {#if form?.error}
-    <div class="rounded-md bg-destructive/10 p-4 text-sm text-destructive">
+    <div
+      class="rounded-md bg-destructive/10 px-4 py-3 text-sm text-destructive"
+      role="alert"
+    >
       {form.error}
     </div>
   {/if}
 
-  <div class="space-y-4">
+  <div class="space-y-3">
     {#each data.normalizedProviders as provider (provider.providerId)}
       <ProviderCard {provider} onOpenEnv={openEnvDialog} />
     {/each}

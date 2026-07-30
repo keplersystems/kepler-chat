@@ -168,22 +168,39 @@ function buildEnvProfileStatus(params: {
   };
 }
 
+// provider.list() costs ~350ms in OpenCode; cache briefly and drop the cache
+// whenever credentials or env profiles change.
+let catalogCache: { providers: unknown; auth: unknown; at: number } | null = null;
+const CATALOG_TTL_MS = 60_000;
+
+function invalidateProviderCatalog(): void {
+  catalogCache = null;
+}
+
+async function loadProviderCatalog(): Promise<{ providers: unknown; auth: unknown }> {
+  if (catalogCache && Date.now() - catalogCache.at < CATALOG_TTL_MS) return catalogCache;
+  const { client } = await opencodeServer.client();
+  const [{ data: providers, error: providerError }, { data: auth, error: authError }] =
+    await Promise.all([client.provider.list(), client.provider.auth()]);
+  if (providerError || !providers) {
+    throw new Error("Failed to fetch providers");
+  }
+  if (authError || !auth) {
+    throw new Error("Failed to fetch provider auth methods");
+  }
+  catalogCache = { providers, auth, at: Date.now() };
+  return catalogCache;
+}
+
 export const providersRoute = new Elysia({ prefix: "/api/providers" })
   .get(
     "/",
     async (context) => {
       requireAuth(context);
-      const { client } = await opencodeServer.client();
-
-      const [{ data: providers, error: providerError }, { data: auth, error: authError }] =
-        await Promise.all([client.provider.list(), client.provider.auth()]);
-
-      if (providerError || !providers) {
-        throw new Error("Failed to fetch providers");
-      }
-      if (authError || !auth) {
-        throw new Error("Failed to fetch provider auth methods");
-      }
+      const { providers, auth } = (await loadProviderCatalog()) as {
+        providers: { all: ProviderListItem[]; connected?: string[] };
+        auth: Record<string, ProviderOAuthMethod[]>;
+      };
 
       const mirroredCredentials = await db.query.providerCredential.findMany();
       const envProfileRows = await db.query.providerEnvProfile.findMany();
@@ -210,7 +227,7 @@ export const providersRoute = new Elysia({ prefix: "/api/providers" })
           return normalizeProviderCapabilities({
             provider,
             oauthMethods,
-            connectedProviderIds: providers.connected,
+            connectedProviderIds: providers.connected ?? [],
             envProfileStatus,
           });
         },
@@ -317,6 +334,7 @@ export const providersRoute = new Elysia({ prefix: "/api/providers" })
   .put(
     "/:providerId/env-profile",
     async (context) => {
+      invalidateProviderCatalog();
       requireAuth(context);
       const { providerId } = context.params;
       const { values } = context.body;
@@ -394,6 +412,7 @@ export const providersRoute = new Elysia({ prefix: "/api/providers" })
   .post(
     "/:providerId/env-file/:envKey",
     async (context) => {
+      invalidateProviderCatalog();
       requireAuth(context);
       const { providerId, envKey } = context.params;
       const { file } = context.body;
@@ -456,6 +475,7 @@ export const providersRoute = new Elysia({ prefix: "/api/providers" })
   .delete(
     "/:providerId/env-profile",
     async (context) => {
+      invalidateProviderCatalog();
       requireAuth(context);
       const { providerId } = context.params;
 
@@ -482,6 +502,7 @@ export const providersRoute = new Elysia({ prefix: "/api/providers" })
   .post(
     "/:providerId/auth",
     async (context) => {
+      invalidateProviderCatalog();
       requireAuth(context);
       const { providerId } = context.params;
       const payload = context.body as OpencodeAuth;
@@ -536,6 +557,7 @@ export const providersRoute = new Elysia({ prefix: "/api/providers" })
   .delete(
     "/:providerId/auth",
     async (context) => {
+      invalidateProviderCatalog();
       requireAuth(context);
       const { providerId } = context.params;
 
@@ -568,6 +590,7 @@ export const providersRoute = new Elysia({ prefix: "/api/providers" })
   .post(
     "/:providerId/oauth/authorize",
     async (context) => {
+      invalidateProviderCatalog();
       requireAuth(context);
       const { providerId } = context.params;
       const { method } = context.body;
@@ -599,6 +622,7 @@ export const providersRoute = new Elysia({ prefix: "/api/providers" })
   .post(
     "/:providerId/oauth/callback",
     async (context) => {
+      invalidateProviderCatalog();
       requireAuth(context);
       const { providerId } = context.params;
       const payload = context.body;
