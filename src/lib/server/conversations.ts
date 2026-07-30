@@ -119,6 +119,20 @@ export async function revertConversation(id: string, messageID: string): Promise
   if (error) throw new Error("Failed to revert conversation");
 }
 
+export async function compactConversation(id: string): Promise<void> {
+  const conv = await requireConversation(id);
+  if (!conv.provider_id || !conv.model_id) {
+    throw new HttpError(400, "Send a message first so the conversation has a model");
+  }
+  const { client } = await opencodeServer.conversationClient(conv);
+  const { error } = await client.session.summarize({
+    sessionID: conv.opencode_session_id,
+    providerID: conv.provider_id,
+    modelID: conv.model_id,
+  });
+  if (error) throw new Error("Failed to compact conversation");
+}
+
 export async function renameConversation(id: string, title: string) {
   const conv = await requireConversation(id);
   const { client } = await opencodeServer.conversationClient(conv);

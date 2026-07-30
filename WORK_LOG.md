@@ -229,6 +229,21 @@ Then three small features, all verified live:
   requestSubmit() — the failed draft is already restored, so retry re-sends exactly it.
   Verified with zhipuai (no balance): send failed, banner + Retry appeared, click re-fired.
 
+### Sidebar freshness fix + manual compaction (finished after a laptop crash mid-edit)
+
+- Root cause of "new chat missing from sidebar until the reply finishes": the layout load
+  only reads url.origin, which never changes, so SvelteKit never re-ran it on navigation —
+  the sidebar rode stale data until the end-of-stream invalidateAll. Fixes: startChat
+  navigates with goto(..., {invalidateAll: true}); chat.send fires invalidateAll as soon as
+  the stream response opens; the user echo adopts the server message id when
+  message.updated arrives so the page can dedup echo-vs-persisted by id (visibleMessages
+  filters streaming entries whose id is already persisted). Verified: mid-stream, the new
+  chat is the top sidebar row, active, with the orb.
+- Compaction: ctx% is now a button (tooltip shows exact tokens, shimmer "compacting…"
+  while running) → POST /:id/compact → session.summarize. Trap: the SDK types mark
+  providerID/modelID optional but the server requires them — pass the conversation's stored
+  model. Verified live: 12,085 → 1,192 tokens (6% → 1%), summary message rendered.
+
 ### Next session cues
 
 - zhipuai still has no balance; fireworks key invalid — first sends on those models error.

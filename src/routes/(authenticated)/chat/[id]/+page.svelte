@@ -41,10 +41,13 @@
   const selectedModel = $derived(selectedModelOverride ?? data.selectedModel);
 
   const persistedMessages = $derived(toMessageViewList(data.messages));
-  const visibleMessages = $derived([
-    ...persistedMessages,
-    ...chat.streamingMessagesFor(conversationId),
-  ]);
+  const visibleMessages = $derived.by(() => {
+    const persistedIds = new Set(persistedMessages.map((m) => m.id));
+    return [
+      ...persistedMessages,
+      ...chat.streamingMessagesFor(conversationId).filter((m) => !persistedIds.has(m.id)),
+    ];
+  });
   const currentRequest = $derived(data.requests[0] ?? chat.pendingRequests[0] ?? null);
   const contextTokens = $derived(
     [...visibleMessages].reverse().find((m) => m.role === "assistant" && m.tokens?.total)?.tokens
@@ -131,6 +134,17 @@
       { text, model: selectedModel, attachments },
       (title) => (liveTitle = title),
     );
+  }
+
+  async function handleCompact() {
+    if (chat.isStreamingFor(conversationId)) return;
+    chat.setError(null);
+    const { error } = await api.api.conversations({ id: conversationId }).compact.post();
+    if (error) {
+      chat.setError("Failed to compact conversation");
+      return;
+    }
+    await invalidateAll();
   }
 
   function handleRegenerate(message: MessageView) {
@@ -256,6 +270,7 @@
         <MessageInput
           bind:this={composer}
           {contextTokens}
+          onCompact={handleCompact}
           onSubmit={handleSendMessage}
           disabled={modelCatalog.loading}
           isStreaming={chat.isStreamingFor(conversationId)}

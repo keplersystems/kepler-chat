@@ -200,12 +200,16 @@ function createChatStore() {
           | null;
         throw new Error(payload?.error ?? `Stream failed (${response.status})`);
       }
+      void invalidateAll();
 
       for await (const env of parseSSEStream(response.body)) {
         switch (env.event) {
           case "message.updated": {
             const info = env.data.info;
             if (info.role === "user") {
+              // Adopt the server's id so pages can dedup the echo against
+              // persisted messages once loads re-run mid-stream.
+              userEcho.id = info.id;
               const title = info.summary?.title?.trim();
               if (title && title !== lastTitle) {
                 lastTitle = title;

@@ -49,6 +49,6 @@ export async function startChat(
   }
 
   void chat.send(created.id, { text, model, attachments, variant });
-  await goto(`/chat/${created.id}`);
+  await goto(`/chat/${created.id}`, { invalidateAll: true });
   return true;
 }

@@ -61,6 +61,7 @@
     onModelChange?: (model: ModelSelection) => void;
     text?: string;
     contextTokens?: number;
+    onCompact?: () => Promise<void>;
   }
 
   let {
@@ -75,12 +76,24 @@
     onModelChange,
     text = $bindable(''),
     contextTokens = 0,
+    onCompact,
   }: Props = $props();
 
   let files: File[] = $state([]);
   let libraryItems: MediaDTO[] = $state([]);
   let libraryOpen = $state(false);
   let variant = $state('');
+  let compacting = $state(false);
+
+  async function compact() {
+    if (!onCompact || compacting) return;
+    compacting = true;
+    try {
+      await onCompact();
+    } finally {
+      compacting = false;
+    }
+  }
   let queued = $state<{
     text: string;
     files: File[];
@@ -519,15 +532,37 @@
       </DropdownMenu.Root>
 
       <div class="flex min-w-0 items-center gap-1.5">
-        {#if contextPct > 0}
-          <span
-            class="shrink-0 font-mono text-[10px] tabular-nums {contextPct >= 85
-              ? 'text-destructive'
-              : 'text-muted-foreground/70'}"
-            title={`Context used: ~${contextTokens.toLocaleString()} of ${contextLimit.toLocaleString()} tokens`}
-          >
-            {contextPct}% ctx
+        {#if compacting}
+          <span class="t-shimmer shrink-0 font-mono text-[10px]" data-text="compacting…">
+            compacting…
           </span>
+        {:else if contextPct > 0}
+          {#if onCompact}
+            <Tooltip.Root>
+              <Tooltip.Trigger
+                onclick={compact}
+                disabled={isStreaming}
+                class="shrink-0 rounded-md px-1 py-0.5 font-mono text-[10px] tabular-nums {contextPct >= 85
+                  ? 'text-destructive'
+                  : 'text-muted-foreground/70'} hover:bg-accent hover:text-foreground"
+                aria-label="Compact conversation"
+              >
+                {contextPct}% ctx
+              </Tooltip.Trigger>
+              <Tooltip.Content>
+                ~{contextTokens.toLocaleString()} of {contextLimit.toLocaleString()} tokens — click to compact
+              </Tooltip.Content>
+            </Tooltip.Root>
+          {:else}
+            <span
+              class="shrink-0 font-mono text-[10px] tabular-nums {contextPct >= 85
+                ? 'text-destructive'
+                : 'text-muted-foreground/70'}"
+              title={`Context used: ~${contextTokens.toLocaleString()} of ${contextLimit.toLocaleString()} tokens`}
+            >
+              {contextPct}% ctx
+            </span>
+          {/if}
         {/if}
         {#if variantOptions.length > 0}
           <Select.Root type="single" bind:value={variant}>

@@ -4,6 +4,7 @@ import { requireAuth } from "$lib/server/auth";
 import {
   branchConversation,
   createConversation,
+  compactConversation,
   deleteConversation,
   renameConversation,
   revertConversation,
@@ -90,6 +91,22 @@ export const conversationsRoute = new Elysia({ prefix: "/api/conversations" })
         summary: "Rename conversation",
         tags: ["Conversations"],
         description: "Rename a conversation and its OpenCode session",
+      },
+    },
+  )
+  .post(
+    "/:id/compact",
+    async (context) => {
+      requireAuth(context);
+      await compactConversation(context.params.id);
+      return { success: true };
+    },
+    {
+      params: t.Object({ id: t.String() }),
+      detail: {
+        summary: "Compact conversation",
+        tags: ["Conversations"],
+        description: "AI-summarize the session history to free context window",
       },
     },
   )
