@@ -60,6 +60,7 @@
     selectedModel?: ModelSelection | null;
     onModelChange?: (model: ModelSelection) => void;
     text?: string;
+    contextTokens?: number;
   }
 
   let {
@@ -73,6 +74,7 @@
     selectedModel = null,
     onModelChange,
     text = $bindable(''),
+    contextTokens = 0,
   }: Props = $props();
 
   let files: File[] = $state([]);
@@ -175,6 +177,18 @@
   );
 
   const variantOptions = $derived(Object.keys(selectedOption?.model.variants ?? {}));
+
+  const contextLimit = $derived(selectedOption?.model.limit?.context ?? 0);
+  const contextPct = $derived(
+    contextLimit > 0 && contextTokens > 0
+      ? Math.min(100, Math.round((contextTokens / contextLimit) * 100))
+      : 0,
+  );
+
+  /** Exposed so the page's error banner can re-fire the restored draft. */
+  export function requestSubmit() {
+    void submit();
+  }
 
   $effect(() => {
     if (variant && !variantOptions.includes(variant)) variant = '';
@@ -505,6 +519,16 @@
       </DropdownMenu.Root>
 
       <div class="flex min-w-0 items-center gap-1.5">
+        {#if contextPct > 0}
+          <span
+            class="shrink-0 font-mono text-[10px] tabular-nums {contextPct >= 85
+              ? 'text-destructive'
+              : 'text-muted-foreground/70'}"
+            title={`Context used: ~${contextTokens.toLocaleString()} of ${contextLimit.toLocaleString()} tokens`}
+          >
+            {contextPct}% ctx
+          </span>
+        {/if}
         {#if variantOptions.length > 0}
           <Select.Root type="single" bind:value={variant}>
             <Select.Trigger

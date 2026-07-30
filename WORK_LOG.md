@@ -214,6 +214,21 @@ stores sessions/messages/parts there; new read-only `opencode-db.ts` via @libsql
   /chats now shows an "In messages" section (200ms debounce) under the title matches.
   Verified live: "html page" surfaced the user message snippet.
 
+### Committed + supervision niceties
+
+Two sessions of work committed as 10 domain commits (deps → parts model → rendering →
+projects/mcp/skills → media → design system → shell → usage/permissions/search → dialogs →
+docs); tips build, intermediate commits are reviewable domains, not guaranteed-buildable.
+Then three small features, all verified live:
+- Sidebar live activity: orb next to any conversation that is currently streaming
+  (chat.isStreamingFor per row) — the multi-agent supervision view.
+- Context meter: "N% ctx" (mono, destructive tint ≥85%) beside the composer controls;
+  last assistant message's total tokens vs the selected model's context limit, passed from
+  the chat page.
+- Retry on failure: the error banner gained Retry, wired to the composer's exported
+  requestSubmit() — the failed draft is already restored, so retry re-sends exactly it.
+  Verified with zhipuai (no balance): send failed, banner + Retry appeared, click re-fired.
+
 ### Next session cues
 
 - zhipuai still has no balance; fireworks key invalid — first sends on those models error.

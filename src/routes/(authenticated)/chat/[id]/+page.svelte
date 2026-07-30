@@ -30,6 +30,7 @@
   const { data }: Props = $props();
   const FILE_PANEL_STORAGE_PREFIX = "kepler:chat:files-panel-collapsed:";
 
+  let composer = $state<MessageInput | null>(null);
   let selectedModelOverride = $state<ModelSelection | null>(null);
   let outputFiles = $state<{ path: string; size: number; mtime: string; isDir: boolean }[]>([]);
   let isFilesPanelCollapsed = $state(false);
@@ -45,6 +46,10 @@
     ...chat.streamingMessagesFor(conversationId),
   ]);
   const currentRequest = $derived(data.requests[0] ?? chat.pendingRequests[0] ?? null);
+  const contextTokens = $derived(
+    [...visibleMessages].reverse().find((m) => m.role === "assistant" && m.tokens?.total)?.tokens
+      ?.total ?? 0,
+  );
 
   $effect(() => {
     chat.setPendingRequests(data.requests);
@@ -230,8 +235,18 @@
         class="mx-auto w-full max-w-[52rem] px-4"
         transition:slide={{ duration: 240, easing: cubicOut }}
       >
-        <div class="mb-2 rounded-lg border border-destructive/30 bg-destructive/10 px-3 py-2 text-sm text-destructive">
-          {chat.lastError}
+        <div class="mb-2 flex items-center justify-between gap-3 rounded-lg border border-destructive/30 bg-destructive/10 px-3 py-2 text-sm text-destructive">
+          <span class="min-w-0 truncate">{chat.lastError}</span>
+          <button
+            type="button"
+            class="shrink-0 font-medium hover:underline"
+            onclick={() => {
+              chat.setError(null);
+              composer?.requestSubmit();
+            }}
+          >
+            Retry
+          </button>
         </div>
       </div>
     {/if}
@@ -239,6 +254,8 @@
     <div class="px-4 pb-4">
       <div class="mx-auto w-full max-w-[52rem]">
         <MessageInput
+          bind:this={composer}
+          {contextTokens}
           onSubmit={handleSendMessage}
           disabled={modelCatalog.loading}
           isStreaming={chat.isStreamingFor(conversationId)}

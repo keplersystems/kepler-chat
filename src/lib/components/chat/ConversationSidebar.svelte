@@ -4,12 +4,14 @@
   import { invalidateAll } from "$app/navigation";
   import { page } from "$app/state";
   import { api } from "$lib/api";
+  import { chat } from "$lib/state/chat.svelte";
   import { focusInput } from "$lib/utils";
   import type { ConversationDTO, ProjectDTO } from "$lib/contracts";
   import { Input } from "$lib/components/ui/input";
   import * as DropdownMenu from "$lib/components/ui/dropdown-menu";
   import * as Tooltip from "$lib/components/ui/tooltip";
   import ThemeToggle from "$lib/components/ui/ThemeToggle.svelte";
+  import { ThinkingOrb } from "$lib/components/ui/orb";
   import FolderIcon from "@lucide/svelte/icons/folder";
   import LogOutIcon from "@lucide/svelte/icons/log-out";
   import ImagesIcon from "@lucide/svelte/icons/images";
@@ -186,6 +188,9 @@
               >
                 {conversation.title}
               </a>
+              {#if chat.isStreamingFor(conversation.id)}
+                <ThinkingOrb size={20} state="working" class="mr-1 shrink-0 opacity-80" aria-label="Generating" />
+              {/if}
               <DropdownMenu.Root>
                 <DropdownMenu.Trigger
                   class="mr-1 rounded-md p-1 text-sidebar-foreground opacity-0 hover:bg-sidebar-accent focus-visible:opacity-100 data-[state=open]:opacity-100 group-hover:opacity-100"
