@@ -1,18 +1,26 @@
 import { browser } from "$app/environment";
-import { api } from "$lib/api";
+import { api, apiErrorMessage } from "$lib/api";
 import type { ModelSelection, Provider } from "$lib/types";
 
 const LAST_MODEL_KEY = "kepler:last-model";
 const FAVORITES_KEY = "kepler:model-favorites";
 
+function readStorage<T>(key: string, fallback: T): T {
+  if (!browser) return fallback;
+  try {
+    return (JSON.parse(window.localStorage.getItem(key) ?? "null") as T | null) ?? fallback;
+  } catch {
+    return fallback;
+  }
+}
+
 function createProvidersStore() {
   let providers = $state<Provider[]>([]);
   let connected = $state<string[]>([]);
   let loading = $state(false);
+  let error = $state<string | null>(null);
   let loaded = false;
-  let favorites = $state<string[]>(
-    browser ? JSON.parse(window.localStorage.getItem(FAVORITES_KEY) ?? "[]") : [],
-  );
+  let favorites = $state<string[]>(readStorage(FAVORITES_KEY, []));
 
   function toggleFavorite(value: string) {
     favorites = favorites.includes(value)
@@ -24,10 +32,13 @@ function createProvidersStore() {
   async function load() {
     if (loaded || loading) return;
     loading = true;
-    const { data, error } = await api.api.providers.get();
-    if (!error && data) {
-      providers = (data.providers.all ?? []) as Provider[];
-      connected = data.providers.connected ?? [];
+    const { data, error: loadError } = await api.api.providers.get();
+    if (loadError || !data) {
+      error = apiErrorMessage(loadError?.value, "Failed to load providers");
+    } else {
+      providers = data.providers.all;
+      connected = data.providers.connected;
+      error = null;
       loaded = true;
     }
     loading = false;
@@ -45,15 +56,8 @@ function createProvidersStore() {
   }
 
   function lastModel(): ModelSelection | null {
-    if (!browser) return null;
-    try {
-      const stored = JSON.parse(
-        window.localStorage.getItem(LAST_MODEL_KEY) ?? "null",
-      ) as ModelSelection | null;
-      return stored && isValid(stored) ? stored : null;
-    } catch {
-      return null;
-    }
+    const stored = readStorage<ModelSelection | null>(LAST_MODEL_KEY, null);
+    return stored && isValid(stored) ? stored : null;
   }
 
   function remember(model: ModelSelection) {
@@ -65,10 +69,15 @@ function createProvidersStore() {
     const remembered = lastModel();
     if (remembered) return remembered;
     const firstConnected = providers.find((p) => connected.includes(p.id));
-    const entries = firstConnected?.models ? Object.entries(firstConnected.models) : [];
-    if (!firstConnected || entries.length === 0) return null;
-    const [modelId, model] = entries[0];
-    return { providerID: firstConnected.id, modelID: model.id ?? modelId };
+    const [model] = Object.values(firstConnected?.models ?? {});
+    if (!firstConnected || !model) return null;
+    return { providerID: firstConnected.id, modelID: model.id };
+  }
+
+  /** Load the catalog and return the model a fresh page should start with. */
+  async function loadDefault(): Promise<ModelSelection | null> {
+    await load();
+    return defaultModel();
   }
 
   return {
@@ -81,11 +90,15 @@ function createProvidersStore() {
     get loading() {
       return loading;
     },
+    get error() {
+      return error;
+    },
     get favorites() {
       return favorites;
     },
     toggleFavorite,
     load,
+    loadDefault,
     lastModel,
     remember,
     defaultModel,

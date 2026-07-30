@@ -1,6 +1,7 @@
 import { mkdir, readFile, writeFile } from "node:fs/promises";
 import { dirname, resolve } from "node:path";
 import type { Config } from "@opencode-ai/sdk/v2";
+import { isEnoent } from "$lib/server/files";
 import { getGlobalOpencodeConfigDir, getProjectRoot } from "$lib/server/paths";
 
 /**
@@ -28,7 +29,7 @@ export async function readOpencodeConfig(scope: ConfigScope): Promise<Config> {
   try {
     return JSON.parse(await readFile(configFilePath(scope), "utf8")) as Config;
   } catch (error) {
-    if ((error as NodeJS.ErrnoException).code === "ENOENT") return {};
+    if (isEnoent(error)) return {};
     throw error;
   }
 }

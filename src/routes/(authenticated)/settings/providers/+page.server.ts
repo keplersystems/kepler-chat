@@ -1,15 +1,12 @@
 import { error, fail } from "@sveltejs/kit";
 import { serverApi } from "$lib/api";
-import type { NormalizedProvider } from "$lib/types";
 import type { Actions, PageServerLoad } from "./$types";
 
 export const load: PageServerLoad = async ({ fetch, url }) => {
   const api = serverApi(fetch, url.origin);
   const { data, error: err } = await api.api.providers.get();
   if (err || !data) throw error(500, "Failed to load providers");
-  return {
-    normalizedProviders: (data.normalizedProviders ?? []) as NormalizedProvider[],
-  };
+  return { normalizedProviders: data.normalizedProviders };
 };
 
 export const actions: Actions = {

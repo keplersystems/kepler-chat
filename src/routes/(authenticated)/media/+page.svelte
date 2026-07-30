@@ -2,7 +2,7 @@
   import { onMount } from "svelte";
   import { api, apiErrorMessage } from "$lib/api";
   import type { MediaDTO } from "$lib/contracts";
-  import { relativeTime } from "$lib/utils";
+  import { formatSize, relativeTime } from "$lib/utils";
   import { Button } from "$lib/components/ui/button";
   import * as Dialog from "$lib/components/ui/dialog";
   import { ThinkingOrb } from "$lib/components/ui/orb";
@@ -17,6 +17,7 @@
 
   let items = $state<MediaDTO[] | null>(null);
   let loadError = $state<string | null>(null);
+  let actionError = $state<string | null>(null);
   let query = $state("");
   let tab = $state<Tab>("all");
   let pendingDelete = $state<MediaDTO | null>(null);
@@ -39,21 +40,13 @@
     { id: "documents", label: "Documents" },
   ];
 
-  function formatSize(bytes: number): string {
-    if (bytes === 0) return "0 B";
-    const k = 1024;
-    const sizes = ["B", "KB", "MB", "GB"];
-    const i = Math.floor(Math.log(bytes) / Math.log(k));
-    return parseFloat((bytes / Math.pow(k, i)).toFixed(1)) + " " + sizes[i];
-  }
-
   async function load() {
     const { data, error } = await api.api.media.get();
     if (error) {
       loadError = apiErrorMessage(error.value, "Failed to load media");
       return;
     }
-    items = data.media as MediaDTO[];
+    items = data.media;
     loadError = null;
   }
 
@@ -61,8 +54,13 @@
 
   async function handleUpload(event: Event) {
     const input = event.target as HTMLInputElement;
+    actionError = null;
     for (const file of input.files ?? []) {
-      await api.api.media.post({ file });
+      const { error } = await api.api.media.post({ file });
+      if (error) {
+        actionError = apiErrorMessage(error.value, `Failed to upload ${file.name}`);
+        break;
+      }
     }
     input.value = "";
     await load();
@@ -74,10 +72,11 @@
     const { error } = await api.api.media({ id: pendingDelete.id }).delete();
     deleting = false;
     if (error) {
-      loadError = apiErrorMessage(error.value, "Failed to delete");
+      actionError = apiErrorMessage(error.value, "Failed to delete");
       return;
     }
     pendingDelete = null;
+    actionError = null;
     await load();
   }
 </script>
@@ -116,6 +115,10 @@
         </button>
       {/each}
     </div>
+
+    {#if actionError}
+      <p class="mt-4 text-sm text-destructive" role="alert">{actionError}</p>
+    {/if}
 
     {#if loadError}
       <p class="mt-6 text-sm text-destructive" role="alert">{loadError}</p>

@@ -1,18 +1,21 @@
 import { Elysia, t } from "elysia";
-import { db } from "$lib/server/db/client";
-import {
-  providerCredential,
-  providerEnvProfile,
-} from "$lib/server/db/schema/opencode";
-import { eq } from "drizzle-orm";
-import { opencodeServer } from "$lib/server/opencode/supervisor";
 import { requireAuth } from "$lib/server/auth";
-import { HttpError } from "$lib/server/http-error";
 import {
-  decryptProviderPayload,
-  encryptProviderPayload,
-} from "$lib/server/crypto";
-import type { Auth as OpencodeAuth } from "@opencode-ai/sdk/v2";
+  authorizeProviderOAuth,
+  completeProviderOAuth,
+  deleteEnvProfile,
+  getEnvProfile,
+  getEnvSchema,
+  listProviders,
+  removeProviderAuth,
+  saveEnvFile,
+  saveEnvProfile,
+  setProviderAuth,
+} from "$lib/server/providers";
+
+const providerParamsSchema = t.Object({
+  providerId: t.String({ minLength: 1 }),
+});
 
 const providerApiAuthSchema = t.Object({
   type: t.Literal("api"),
@@ -25,231 +28,18 @@ const providerWellKnownAuthSchema = t.Object({
   token: t.String({ minLength: 1 }),
 });
 
-const providerOAuthAuthorizeSchema = t.Object({
-  method: t.Number({ minimum: 0 }),
-});
-
-const providerOAuthCallbackSchema = t.Object({
-  method: t.Number({ minimum: 0 }),
-  code: t.Optional(t.String({ minLength: 1 })),
-});
-
-type ProviderAuthMode = "oauth" | "api_key" | "manual_env";
-type ProviderEnvInputKind = "text" | "secret" | "file_path";
-
-interface ProviderListItem {
-  id: string;
-  name: string;
-  env?: string[];
-}
-
-interface ProviderOAuthMethod {
-  type: "oauth" | "api";
-  label: string;
-}
-
-interface IndexedProviderOAuthMethod extends ProviderOAuthMethod {
-  index: number;
-}
-
-interface ProviderEnvFieldSchema {
-  key: string;
-  required: true;
-  inputKind: ProviderEnvInputKind;
-  description: string;
-}
-
-interface ProviderEnvProfileStatus {
-  configuredCount: number;
-  totalCount: number;
-  configuredKeys: string[];
-  missingKeys: string[];
-  ready: boolean;
-}
-
-const providerEnvProfileUpsertSchema = t.Object({
-  values: t.Record(t.String({ minLength: 1 }), t.String({ minLength: 1 })),
-});
-
-function isSecretLikeEnvKey(value: string): boolean {
-  return /(?:^|_)(?:API_KEY|TOKEN|SECRET|PASSWORD|PRIVATE_KEY)(?:_|$)/i.test(
-    value,
-  );
-}
-
-function isFilePathEnvKey(value: string): boolean {
-  return /(?:^|_)(?:CREDENTIALS|CERT|KEY_FILE|TOKEN_FILE|CONFIG_FILE)(?:_|$)/i.test(
-    value,
-  );
-}
-
-function buildProviderEnvSchema(envVars: string[]): ProviderEnvFieldSchema[] {
-  return envVars.map((key) => {
-    const inputKind: ProviderEnvInputKind = isFilePathEnvKey(key)
-      ? "file_path"
-      : isSecretLikeEnvKey(key)
-        ? "secret"
-        : "text";
-
-    const description =
-      inputKind === "file_path"
-        ? "Filesystem path to credential/config file available to OpenCode"
-        : inputKind === "secret"
-          ? "Sensitive value; encrypted at rest"
-          : "Provider configuration value";
-
-    return {
-      key,
-      required: true,
-      inputKind,
-      description,
-    };
-  });
-}
-
-async function requireProvider(providerId: string): Promise<ProviderListItem> {
-  const { client } = await opencodeServer.client();
-  const { data, error } = await client.provider.list();
-  if (error || !data) throw new Error("Failed to fetch providers");
-  const provider = (data.all as ProviderListItem[]).find((p) => p.id === providerId);
-  if (!provider) throw new HttpError(404, "Provider not found");
-  return provider;
-}
-
-function normalizeProviderCapabilities(input: {
-  provider: ProviderListItem;
-  oauthMethods: IndexedProviderOAuthMethod[];
-  connectedProviderIds: string[];
-  envProfileStatus: ProviderEnvProfileStatus;
-}) {
-  const envVars = input.provider.env ?? [];
-  const keyLikeEnvVars = envVars.filter((value) => isSecretLikeEnvKey(value));
-  const envSchema = buildProviderEnvSchema(envVars);
-
-  let authMode: ProviderAuthMode = "manual_env";
-  if (input.oauthMethods.length > 0) {
-    authMode = "oauth";
-  } else if (keyLikeEnvVars.length === 1 && envVars.length === 1) {
-    authMode = "api_key";
-  }
-
-  return {
-    providerId: input.provider.id,
-    providerName: input.provider.name,
-    connected: input.connectedProviderIds.includes(input.provider.id),
-    authMode,
-    oauthMethods: input.oauthMethods,
-    envSchema,
-    envVars,
-    keyLikeEnvVars,
-    primaryApiKeyEnvVar: keyLikeEnvVars[0] ?? null,
-    requiresAdditionalEnv: envVars.length > keyLikeEnvVars.length,
-    envProfileStatus: input.envProfileStatus,
-  };
-}
-
-function buildEnvProfileStatus(params: {
-  envVars: string[];
-  profileKeys: Set<string>;
-}): ProviderEnvProfileStatus {
-  const totalCount = params.envVars.length;
-  const configuredKeys = params.envVars.filter((key) =>
-    params.profileKeys.has(key),
-  );
-  const missingKeys = params.envVars.filter((key) => !params.profileKeys.has(key));
-  const configuredCount = configuredKeys.length;
-
-  return {
-    configuredCount,
-    totalCount,
-    configuredKeys,
-    missingKeys,
-    ready: totalCount > 0 && configuredCount === totalCount,
-  };
-}
-
-// provider.list() costs ~350ms in OpenCode; cache briefly and drop the cache
-// whenever credentials or env profiles change.
-let catalogCache: { providers: unknown; auth: unknown; at: number } | null = null;
-const CATALOG_TTL_MS = 60_000;
-
-function invalidateProviderCatalog(): void {
-  catalogCache = null;
-}
-
-async function loadProviderCatalog(): Promise<{ providers: unknown; auth: unknown }> {
-  if (catalogCache && Date.now() - catalogCache.at < CATALOG_TTL_MS) return catalogCache;
-  const { client } = await opencodeServer.client();
-  const [{ data: providers, error: providerError }, { data: auth, error: authError }] =
-    await Promise.all([client.provider.list(), client.provider.auth()]);
-  if (providerError || !providers) {
-    throw new Error("Failed to fetch providers");
-  }
-  if (authError || !auth) {
-    throw new Error("Failed to fetch provider auth methods");
-  }
-  catalogCache = { providers, auth, at: Date.now() };
-  return catalogCache;
-}
-
 export const providersRoute = new Elysia({ prefix: "/api/providers" })
   .get(
     "/",
     async (context) => {
       requireAuth(context);
-      const { providers, auth } = (await loadProviderCatalog()) as {
-        providers: { all: ProviderListItem[]; connected?: string[] };
-        auth: Record<string, ProviderOAuthMethod[]>;
-      };
-
-      const mirroredCredentials = await db.query.providerCredential.findMany();
-      const envProfileRows = await db.query.providerEnvProfile.findMany();
-      const profileKeysByProvider = new Map<string, Set<string>>();
-      for (const row of envProfileRows) {
-        const set = profileKeysByProvider.get(row.provider_id) ?? new Set<string>();
-        set.add(row.env_key);
-        profileKeysByProvider.set(row.provider_id, set);
-      }
-      const oauthMethodMap = auth as Record<string, ProviderOAuthMethod[]>;
-      const normalizedProviders = (providers.all as ProviderListItem[]).map(
-        (provider) => {
-          const oauthMethods = (oauthMethodMap[provider.id] ?? []).map(
-            (method, index) => ({
-              ...method,
-              index,
-            }),
-          );
-          const envProfileStatus = buildEnvProfileStatus({
-            envVars: provider.env ?? [],
-            profileKeys: profileKeysByProvider.get(provider.id) ?? new Set<string>(),
-          });
-
-          return normalizeProviderCapabilities({
-            provider,
-            oauthMethods,
-            connectedProviderIds: providers.connected ?? [],
-            envProfileStatus,
-          });
-        },
-      );
-
-      return {
-        providers,
-        normalizedProviders,
-        mirroredCredentials: mirroredCredentials.map((credential) => ({
-          providerId: credential.provider_id,
-          authType: credential.auth_type,
-          keyVersion: credential.key_version,
-          updatedAt: credential.updated_at,
-        })),
-      };
+      return listProviders();
     },
     {
       detail: {
         summary: "List providers",
         tags: ["Providers"],
-        description:
-          "List available providers/models, auth methods, and mirrored credential metadata",
+        description: "List available providers/models and auth methods",
       },
     },
   )
@@ -258,18 +48,10 @@ export const providersRoute = new Elysia({ prefix: "/api/providers" })
     async (context) => {
       requireAuth(context);
       const { providerId } = context.params;
-      const provider = await requireProvider(providerId);
-
-      const envSchema = buildProviderEnvSchema(provider.env ?? []);
-      return {
-        providerId,
-        envSchema,
-      };
+      return { providerId, envSchema: await getEnvSchema(providerId) };
     },
     {
-      params: t.Object({
-        providerId: t.String({ minLength: 1 }),
-      }),
+      params: providerParamsSchema,
       detail: {
         summary: "Get provider env schema",
         tags: ["Providers"],
@@ -282,47 +64,10 @@ export const providersRoute = new Elysia({ prefix: "/api/providers" })
     "/:providerId/env-profile",
     async (context) => {
       requireAuth(context);
-      const { providerId } = context.params;
-      const provider = await requireProvider(providerId);
-
-      const envSchema = buildProviderEnvSchema(provider.env ?? []);
-      const rows = await db.query.providerEnvProfile.findMany({
-        where: (fields, { eq }) => eq(fields.provider_id, providerId),
-      });
-
-      const byKey = new Map(rows.map((row) => [row.env_key, row]));
-      const values = envSchema.map((field) => {
-        const row = byKey.get(field.key);
-        if (!row) {
-          return {
-            key: field.key,
-            value: null,
-            configured: false,
-          };
-        }
-
-        const decrypted = decryptProviderPayload({
-          encryptedPayload: row.encrypted_value,
-          iv: row.iv,
-          authTag: row.auth_tag,
-        }) as { value?: string };
-
-        return {
-          key: field.key,
-          value: field.inputKind === "secret" ? null : (decrypted.value ?? null),
-          configured: true,
-        };
-      });
-
-      return {
-        providerId,
-        values,
-      };
+      return getEnvProfile(context.params.providerId);
     },
     {
-      params: t.Object({
-        providerId: t.String({ minLength: 1 }),
-      }),
+      params: providerParamsSchema,
       detail: {
         summary: "Get provider env profile",
         tags: ["Providers"],
@@ -334,73 +79,15 @@ export const providersRoute = new Elysia({ prefix: "/api/providers" })
   .put(
     "/:providerId/env-profile",
     async (context) => {
-      invalidateProviderCatalog();
       requireAuth(context);
-      const { providerId } = context.params;
-      const { values } = context.body;
-      const provider = await requireProvider(providerId);
-
-      const envVars = provider.env ?? [];
-      const allowed = new Set(envVars);
-      const incomingEntries = Object.entries(values).filter(([, value]) => value.trim().length > 0);
-      const invalidKeys = incomingEntries
-        .map(([key]) => key)
-        .filter((key) => !allowed.has(key));
-      if (invalidKeys.length > 0) {
-        context.set.status = 400;
-        return { error: `Invalid env keys: ${invalidKeys.join(", ")}` };
-      }
-
-      const existingRows = await db.query.providerEnvProfile.findMany({
-        where: (fields, { eq }) => eq(fields.provider_id, providerId),
-      });
-      const existingKeys = new Set(existingRows.map((row) => row.env_key));
-      const incomingKeys = new Set(incomingEntries.map(([key]) => key));
-      const finalKeys = new Set([...existingKeys, ...incomingKeys]);
-
-      for (const key of envVars) {
-        if (!finalKeys.has(key)) {
-          context.set.status = 400;
-          return { error: `Missing required env value: ${key}` };
-        }
-      }
-
-      for (const [key, value] of incomingEntries) {
-        const encrypted = encryptProviderPayload({ value });
-        await db
-          .insert(providerEnvProfile)
-          .values({
-            provider_id: providerId,
-            env_key: key,
-            encrypted_value: encrypted.encryptedPayload,
-            iv: encrypted.iv,
-            auth_tag: encrypted.authTag,
-            key_version: 1,
-          })
-          .onConflictDoUpdate({
-            target: [
-              providerEnvProfile.provider_id,
-              providerEnvProfile.env_key,
-            ],
-            set: {
-              encrypted_value: encrypted.encryptedPayload,
-              iv: encrypted.iv,
-              auth_tag: encrypted.authTag,
-              key_version: 1,
-              updated_at: new Date(),
-            },
-          });
-      }
-
-      await opencodeServer.restart();
-
+      await saveEnvProfile(context.params.providerId, context.body.values);
       return { success: true };
     },
     {
-      params: t.Object({
-        providerId: t.String({ minLength: 1 }),
+      params: providerParamsSchema,
+      body: t.Object({
+        values: t.Record(t.String({ minLength: 1 }), t.String({ minLength: 1 })),
       }),
-      body: providerEnvProfileUpsertSchema,
       detail: {
         summary: "Save provider env profile",
         tags: ["Providers"],
@@ -412,49 +99,9 @@ export const providersRoute = new Elysia({ prefix: "/api/providers" })
   .post(
     "/:providerId/env-file/:envKey",
     async (context) => {
-      invalidateProviderCatalog();
       requireAuth(context);
       const { providerId, envKey } = context.params;
-      const { file } = context.body;
-      const provider = await requireProvider(providerId);
-
-      const envSchema = buildProviderEnvSchema(provider.env ?? []);
-      const envField = envSchema.find((field) => field.key === envKey);
-      if (!envField) {
-        context.set.status = 400;
-        return { error: "Invalid env key for provider" };
-      }
-      if (envField.inputKind !== "file_path") {
-        context.set.status = 400;
-        return { error: "Selected env key is not a file path field" };
-      }
-
-      if (!(file instanceof File)) {
-        context.set.status = 400;
-        return { error: "Missing file upload" };
-      }
-
-      const { env } = await import("$lib/env");
-      const { join, resolve } = await import("path");
-      const { mkdir, writeFile } = await import("fs/promises");
-      const sanitizeSegment = (value: string) => value.replace(/[^a-zA-Z0-9._-]/g, "_");
-      const safeProviderId = sanitizeSegment(providerId);
-      const safeEnvKey = sanitizeSegment(envKey);
-      const sanitizedName = file.name.replace(/[^a-zA-Z0-9._-]/g, "_");
-      const baseDir = resolve(
-        env.KEPLER_SESSIONS_PATH,
-        "provider-env",
-        safeProviderId,
-        safeEnvKey,
-      );
-      await mkdir(baseDir, { recursive: true });
-      const filePath = join(baseDir, sanitizedName || "credential.bin");
-      const bytes = new Uint8Array(await file.arrayBuffer());
-      await writeFile(filePath, bytes);
-
-      // Return absolute path — the OpenCode process runs with cwd set to
-      // the conversation directory, so relative paths would resolve incorrectly.
-      return { path: filePath };
+      return { path: await saveEnvFile(providerId, envKey, context.body.file) };
     },
     {
       params: t.Object({
@@ -475,22 +122,12 @@ export const providersRoute = new Elysia({ prefix: "/api/providers" })
   .delete(
     "/:providerId/env-profile",
     async (context) => {
-      invalidateProviderCatalog();
       requireAuth(context);
-      const { providerId } = context.params;
-
-      await db
-        .delete(providerEnvProfile)
-        .where(eq(providerEnvProfile.provider_id, providerId));
-
-      await opencodeServer.restart();
-
+      await deleteEnvProfile(context.params.providerId);
       return { success: true };
     },
     {
-      params: t.Object({
-        providerId: t.String({ minLength: 1 }),
-      }),
+      params: providerParamsSchema,
       detail: {
         summary: "Delete provider env profile",
         tags: ["Providers"],
@@ -502,116 +139,47 @@ export const providersRoute = new Elysia({ prefix: "/api/providers" })
   .post(
     "/:providerId/auth",
     async (context) => {
-      invalidateProviderCatalog();
       requireAuth(context);
-      const { providerId } = context.params;
-      const payload = context.body as OpencodeAuth;
-
-      const { client } = await opencodeServer.client();
-      const { data, error } = await client.auth.set({
-        providerID: providerId,
-        auth: payload,
-      });
-      if (error || !data) {
-        throw new Error("Failed to set provider auth");
-      }
-
-      const encrypted = encryptProviderPayload(payload);
-      await db
-        .insert(providerCredential)
-        .values({
-          provider_id: providerId,
-          auth_type: payload.type,
-          encrypted_payload: encrypted.encryptedPayload,
-          iv: encrypted.iv,
-          auth_tag: encrypted.authTag,
-          key_version: 1,
-        })
-        .onConflictDoUpdate({
-          target: providerCredential.provider_id,
-          set: {
-            auth_type: payload.type,
-            encrypted_payload: encrypted.encryptedPayload,
-            iv: encrypted.iv,
-            auth_tag: encrypted.authTag,
-            key_version: 1,
-            updated_at: new Date(),
-          },
-        });
-
+      await setProviderAuth(context.params.providerId, context.body);
       return { success: true };
     },
     {
-      params: t.Object({
-        providerId: t.String({ minLength: 1 }),
-      }),
+      params: providerParamsSchema,
       body: t.Union([providerApiAuthSchema, providerWellKnownAuthSchema]),
       detail: {
         summary: "Set provider auth",
         tags: ["Providers"],
-        description:
-          "Set provider credentials in OpenCode and mirror the encrypted payload in Kepler DB",
+        description: "Set provider credentials in OpenCode",
       },
     },
   )
   .delete(
     "/:providerId/auth",
     async (context) => {
-      invalidateProviderCatalog();
       requireAuth(context);
-      const { providerId } = context.params;
-
-      const { client } = await opencodeServer.client();
-      const { data, error } = await client.auth.remove({
-        providerID: providerId,
-      });
-      if (error || !data) {
-        throw new Error("Failed to remove provider auth");
-      }
-
-      await db
-        .delete(providerCredential)
-        .where(eq(providerCredential.provider_id, providerId));
-
+      await removeProviderAuth(context.params.providerId);
       return { success: true };
     },
     {
-      params: t.Object({
-        providerId: t.String({ minLength: 1 }),
-      }),
+      params: providerParamsSchema,
       detail: {
         summary: "Remove provider auth",
         tags: ["Providers"],
-        description:
-          "Remove provider credentials from OpenCode and delete mirrored Kepler DB credential row",
+        description: "Remove provider credentials from OpenCode",
       },
     },
   )
   .post(
     "/:providerId/oauth/authorize",
     async (context) => {
-      invalidateProviderCatalog();
       requireAuth(context);
-      const { providerId } = context.params;
-      const { method } = context.body;
-      const { client } = await opencodeServer.client();
-
-      const { data, error } = await client.provider.oauth.authorize({
-        providerID: providerId,
-        method,
-      });
-
-      if (error || !data) {
-        throw new Error("Failed to authorize provider oauth");
-      }
-
-      return data;
+      return authorizeProviderOAuth(context.params.providerId, context.body.method);
     },
     {
-      params: t.Object({
-        providerId: t.String({ minLength: 1 }),
+      params: providerParamsSchema,
+      body: t.Object({
+        method: t.Number({ minimum: 0 }),
       }),
-      body: providerOAuthAuthorizeSchema,
       detail: {
         summary: "Start provider OAuth",
         tags: ["Providers"],
@@ -622,64 +190,21 @@ export const providersRoute = new Elysia({ prefix: "/api/providers" })
   .post(
     "/:providerId/oauth/callback",
     async (context) => {
-      invalidateProviderCatalog();
       requireAuth(context);
-      const { providerId } = context.params;
-      const payload = context.body;
-      const { client } = await opencodeServer.client();
-
-      const { data, error } = await client.provider.oauth.callback({
-        providerID: providerId,
-        method: payload.method,
-        code: payload.code,
-      });
-
-      if (error || !data) {
-        throw new Error("Failed to complete provider oauth callback");
-      }
-
-      const encrypted = encryptProviderPayload({
-        type: "oauth",
-        providerId,
-        method: payload.method,
-        code: payload.code ?? null,
-        mirroredAt: Date.now(),
-      });
-
-      await db
-        .insert(providerCredential)
-        .values({
-          provider_id: providerId,
-          auth_type: "oauth",
-          encrypted_payload: encrypted.encryptedPayload,
-          iv: encrypted.iv,
-          auth_tag: encrypted.authTag,
-          key_version: 1,
-        })
-        .onConflictDoUpdate({
-          target: providerCredential.provider_id,
-          set: {
-            auth_type: "oauth",
-            encrypted_payload: encrypted.encryptedPayload,
-            iv: encrypted.iv,
-            auth_tag: encrypted.authTag,
-            key_version: 1,
-            updated_at: new Date(),
-          },
-        });
-
+      const { method, code } = context.body;
+      await completeProviderOAuth(context.params.providerId, method, code);
       return { success: true };
     },
     {
-      params: t.Object({
-        providerId: t.String({ minLength: 1 }),
+      params: providerParamsSchema,
+      body: t.Object({
+        method: t.Number({ minimum: 0 }),
+        code: t.Optional(t.String({ minLength: 1 })),
       }),
-      body: providerOAuthCallbackSchema,
       detail: {
         summary: "Complete provider OAuth",
         tags: ["Providers"],
-        description:
-          "Complete provider OAuth callback in OpenCode and mirror encrypted callback payload metadata in Kepler DB",
+        description: "Complete provider OAuth callback in OpenCode",
       },
     },
   );

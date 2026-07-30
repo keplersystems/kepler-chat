@@ -101,7 +101,6 @@ function extractErrorMessage(error: AssistantMessage["error"]): string | undefin
   return typeof message === "string" ? message : error.name;
 }
 
-/** Apply message-level metadata from an OpenCode message onto a view. */
 export function applyMessageInfo(view: MessageView, info: Message): void {
   view.role = info.role;
   view.createdAt = info.time.created;
@@ -118,7 +117,6 @@ export function applyMessageInfo(view: MessageView, info: Message): void {
   }
 }
 
-/** Concatenated text content, used for copy-to-clipboard. */
 /**
  * Rebuild a send-API attachment from a persisted user file part. Uploads live
  * under the conversation's input/ dir (see paths.ts) and the API takes paths

@@ -3,7 +3,7 @@
   import { fade } from "svelte/transition";
   import { enhance } from "$app/forms";
   import type { SubmitFunction } from "@sveltejs/kit";
-  import type { ConversationDTO, ProjectDTO } from "$lib/contracts";
+  import { INSTRUCTIONS_MAX_LENGTH, type ConversationDTO, type ProjectDTO } from "$lib/contracts";
   import { focusInput, relativeTime } from "$lib/utils";
   import { modelCatalog } from "$lib/state/providers.svelte";
   import { startChat } from "$lib/state/start-chat";
@@ -55,8 +55,8 @@
   let selectedModel = $state<ModelSelection | null>(null);
 
   $effect(() => {
-    modelCatalog.load().then(() => {
-      if (!selectedModel) selectedModel = modelCatalog.defaultModel();
+    modelCatalog.loadDefault().then((model) => {
+      if (!selectedModel) selectedModel = model;
     });
   });
 
@@ -305,7 +305,7 @@
         name="content"
         bind:value={instructions}
         class="min-h-44 font-mono text-sm"
-        maxlength={65536}
+        maxlength={INSTRUCTIONS_MAX_LENGTH}
         placeholder="e.g. Always respond concisely. Prefer TypeScript for code examples."
         aria-label="Project instructions"
       />

@@ -1,31 +1,10 @@
 <script lang="ts">
   import { onMount } from "svelte";
   import { api, apiErrorMessage } from "$lib/api";
+  import type { UsageResponse } from "$lib/contracts";
   import { ThinkingOrb } from "$lib/components/ui/orb";
 
-  interface UsageData {
-    days: Array<{ day: string; cost: number; tokens: number; messages: number }>;
-    models: Array<{
-      providerID: string;
-      modelID: string;
-      cost: number;
-      input: number;
-      output: number;
-      reasoning: number;
-      messages: number;
-    }>;
-    topConversations: Array<{
-      id: string;
-      title: string;
-      cost: number;
-      tokens: number;
-      messages: number;
-    }>;
-    totals: { cost: number; tokens: number; messages: number };
-    windowDays: number;
-  }
-
-  let data = $state<UsageData | null>(null);
+  let data = $state<UsageResponse | null>(null);
   let error = $state<string | null>(null);
 
   onMount(async () => {
@@ -34,7 +13,7 @@
       error = apiErrorMessage(err.value, "Failed to load usage");
       return;
     }
-    data = response as UsageData;
+    data = response;
   });
 
   const maxDayTokens = $derived(Math.max(1, ...(data?.days ?? []).map((d) => d.tokens)));

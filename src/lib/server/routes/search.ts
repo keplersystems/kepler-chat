@@ -1,4 +1,5 @@
 import { Elysia, t } from "elysia";
+import type { MessageSearchResult } from "$lib/contracts";
 import { db } from "$lib/server/db/client";
 import { requireAuth } from "$lib/server/auth";
 import { searchMessageText } from "$lib/server/opencode-db";
@@ -25,7 +26,7 @@ export const searchRoute = new Elysia({ prefix: "/api/search" }).get(
     const bySession = new Map(conversations.map((c) => [c.opencode_session_id, c]));
 
     const seen = new Set<string>();
-    const results = [];
+    const results: MessageSearchResult[] = [];
     for (const match of matches) {
       const conversation = bySession.get(match.sessionID);
       if (!conversation) continue;

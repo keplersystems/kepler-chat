@@ -1,13 +1,25 @@
 <script lang="ts">
+  import { untrack } from "svelte";
   import { slide } from "svelte/transition";
   import { cubicOut } from "svelte/easing";
   import type { Message, Part } from "@opencode-ai/sdk/v2";
-  import type { ConversationDTO, PendingRequestDTO, ProjectDTO } from "$lib/contracts";
+  import type {
+    ConversationDTO,
+    FileEntryDTO,
+    PendingRequestDTO,
+    ProjectDTO,
+  } from "$lib/contracts";
   import { browser } from "$app/environment";
   import { goto, invalidateAll } from "$app/navigation";
   import { api } from "$lib/api";
-  import { chat, toMessageViewList, type MessageView } from "$lib/state/chat.svelte";
-  import { fileAttachmentInput, messageText } from "$lib/messages";
+  import { chat } from "$lib/state/chat.svelte";
+  import { uploadAttachments } from "$lib/state/attachments";
+  import {
+    fileAttachmentInput,
+    messageText,
+    toMessageViewList,
+    type MessageView,
+  } from "$lib/messages";
   import { modelCatalog } from "$lib/state/providers.svelte";
   import type { ModelSelection } from "$lib/types";
   import MessageList from "$lib/components/chat/MessageList.svelte";
@@ -32,7 +44,7 @@
 
   let composer = $state<MessageInput | null>(null);
   let selectedModelOverride = $state<ModelSelection | null>(null);
-  let outputFiles = $state<{ path: string; size: number; mtime: string; isDir: boolean }[]>([]);
+  let outputFiles = $state<FileEntryDTO[]>([]);
   let isFilesPanelCollapsed = $state(false);
   let liveTitle = $state<string | null>(null);
 
@@ -41,17 +53,20 @@
   const selectedModel = $derived(selectedModelOverride ?? data.selectedModel);
 
   const persistedMessages = $derived(toMessageViewList(data.messages));
+  // Streaming copies win over persisted ones so a reattached stream updates
+  // the partially-persisted assistant message in place.
   const visibleMessages = $derived.by(() => {
+    const streaming = chat.streamingMessagesFor(conversationId);
+    const streamingById = new Map(streaming.map((m) => [m.id, m]));
     const persistedIds = new Set(persistedMessages.map((m) => m.id));
     return [
-      ...persistedMessages,
-      ...chat.streamingMessagesFor(conversationId).filter((m) => !persistedIds.has(m.id)),
+      ...persistedMessages.map((m) => streamingById.get(m.id) ?? m),
+      ...streaming.filter((m) => !persistedIds.has(m.id)),
     ];
   });
   const currentRequest = $derived(data.requests[0] ?? chat.pendingRequests[0] ?? null);
   const contextTokens = $derived(
-    [...visibleMessages].reverse().find((m) => m.role === "assistant" && m.tokens?.total)?.tokens
-      ?.total ?? 0,
+    visibleMessages.findLast((m) => m.role === "assistant" && m.tokens?.total)?.tokens?.total ?? 0,
   );
 
   $effect(() => {
@@ -81,9 +96,17 @@
   $effect(() => {
     void conversationId;
     loadFiles();
-    modelCatalog.load().then(() => {
-      if (!selectedModel) selectedModelOverride = modelCatalog.defaultModel();
+    modelCatalog.loadDefault().then((model) => {
+      if (!selectedModel) selectedModelOverride = model;
     });
+  });
+
+  // Pick up a generation started before this page loaded (reload, other tab).
+  $effect(() => {
+    const id = conversationId;
+    if (!untrack(() => chat.isStreamingFor(id))) {
+      void chat.attach(id, (title) => (liveTitle = title));
+    }
   });
 
   async function loadFiles() {
@@ -180,36 +203,8 @@
       return false;
     chat.setError(null);
 
-    const attachments: Array<{ path: string; mimeType?: string; filename?: string }> = [];
-    if (files && files.length > 0) {
-      for (const file of files) {
-        const { data: uploaded, error } = await api.api
-          .conversations({ id: conversationId })
-          .files.upload.post({ file });
-        if (error || !uploaded || "error" in uploaded) {
-          chat.setError(
-            (error?.value as { error?: string } | undefined)?.error ?? "Failed to upload file",
-          );
-          return false;
-        }
-        attachments.push({
-          path: uploaded.file.path,
-          mimeType: uploaded.file.mimeType,
-          filename: file.name,
-        });
-      }
-    }
-
-    for (const mediaId of mediaIds ?? []) {
-      const { data: linked, error: linkError } = await api.api
-        .conversations({ id: conversationId })
-        .files["from-library"].post({ mediaId });
-      if (linkError || !linked || "error" in linked) {
-        chat.setError("Failed to attach from library");
-        return false;
-      }
-      attachments.push(linked.file);
-    }
+    const attachments = await uploadAttachments(conversationId, files, mediaIds);
+    if (!attachments) return false;
 
     const succeeded = await chat.send(
       conversationId,

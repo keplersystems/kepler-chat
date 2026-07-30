@@ -2,6 +2,7 @@ import { browser } from "$app/environment";
 
 export type Theme = "light" | "dark" | "system";
 
+// Also read by the pre-paint inline script in src/app.html; keep in sync.
 const STORAGE_KEY = "kepler:theme";
 
 function stored(): Theme {

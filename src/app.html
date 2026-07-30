@@ -6,6 +6,8 @@
     <meta name="viewport" content="width=device-width, initial-scale=1" />
     <script>
       // Apply the theme before first paint to avoid a flash of the wrong scheme.
+      // Key must match STORAGE_KEY in src/lib/state/theme.svelte.ts (inline
+      // scripts cannot import it).
       const stored = localStorage.getItem("kepler:theme");
       const dark =
         stored === "dark" ||

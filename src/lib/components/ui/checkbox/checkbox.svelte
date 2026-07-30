@@ -3,10 +3,9 @@
     checked: boolean;
     onCheckedChange?: (checked: boolean) => void;
     "aria-label": string;
-    class?: string;
   }
 
-  const { checked, onCheckedChange, "aria-label": ariaLabel, class: className }: Props = $props();
+  const { checked, onCheckedChange, "aria-label": ariaLabel }: Props = $props();
 </script>
 
 <button
@@ -20,7 +19,7 @@
   }}
   class="t-check flex h-[18px] w-[18px] shrink-0 items-center justify-center rounded border {checked
     ? 'border-primary bg-primary'
-    : 'border-foreground/25 bg-transparent hover:border-foreground/45'} {className ?? ''}"
+    : 'border-foreground/25 bg-transparent hover:border-foreground/45'}"
 >
   <svg viewBox="0 0 10.1668 10.1668" class="h-2.5 w-2.5 overflow-visible" aria-hidden="true">
     <path

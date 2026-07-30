@@ -11,7 +11,6 @@
   const { request }: Props = $props();
 
   const requestId = $derived(request?.request.id ?? null);
-  const isOpen = $derived(request !== null);
 
   const questions = $derived(request?.type === "question" ? request.request.questions : []);
   const metadataEntries = $derived(
@@ -51,8 +50,8 @@
   }
 </script>
 
-{#if request && requestId}
-  <Dialog.Root open={isOpen}>
+{#if request}
+  <Dialog.Root open={true}>
     <Dialog.Content class="max-w-lg">
       {#if request.type === "permission"}
         {@const perm = request.request}

@@ -17,11 +17,7 @@
   );
 </script>
 
-<ChatLayout
-  conversations={data.conversations}
-  projects={data.projects}
-  {currentConversationId}
->
+<ChatLayout conversations={data.conversations} {currentConversationId}>
   {@render children()}
 </ChatLayout>
 

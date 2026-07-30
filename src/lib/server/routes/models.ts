@@ -1,14 +1,7 @@
 import { Elysia, t } from "elysia";
-import { db } from "$lib/server/db/client";
-import { conversation } from "$lib/server/db/schema/opencode";
-import { eq } from "drizzle-orm";
-import { opencodeServer } from "$lib/server/opencode/supervisor";
 import { requireAuth } from "$lib/server/auth";
 import { requireConversation } from "$lib/server/conversations";
-import {
-  hasProviderModel,
-  type ProviderModelCatalog,
-} from "$lib/server/provider-models";
+import { setConversationModel } from "$lib/server/messages";
 
 export const modelsRoute = new Elysia({ prefix: "/api/conversations" })
   .get(
@@ -47,25 +40,7 @@ export const modelsRoute = new Elysia({ prefix: "/api/conversations" })
       const { id } = context.params;
       const { providerID, modelID } = context.body;
       const conv = await requireConversation(id);
-
-      const { client } = await opencodeServer.conversationClient(conv);
-      const { data: providers, error } = await client.provider.list();
-      if (error || !providers) {
-        throw new Error("Failed to fetch provider catalog");
-      }
-
-      if (!hasProviderModel(providers.all as ProviderModelCatalog[], providerID, modelID)) {
-        context.set.status = 400;
-        return { error: "Invalid provider/model selection" };
-      }
-
-      await db
-        .update(conversation)
-        .set({
-          provider_id: providerID,
-          model_id: modelID,
-        })
-        .where(eq(conversation.id, id));
+      await setConversationModel(conv, { providerID, modelID });
 
       return {
         success: true,

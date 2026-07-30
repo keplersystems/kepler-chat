@@ -1,5 +1,5 @@
 <script lang="ts">
-  import type { MessageView } from '$lib/state/chat.svelte';
+  import type { MessageView } from '$lib/messages';
   import MessageBubble from './MessageBubble.svelte';
   import { ThinkingOrb } from '$lib/components/ui/orb';
   import { ScrollArea } from '$lib/components/ui/scroll-area';
@@ -9,14 +9,13 @@
   interface Props {
     messages: MessageView[];
     isStreaming?: boolean;
-    onCopy?: (message: MessageView) => void;
     onRegenerate?: (message: MessageView) => void;
     onDelete?: (message: MessageView) => void;
     onEdit?: (message: MessageView, text: string) => void;
     onBranch?: (message: MessageView) => void;
   }
 
-  let { messages, isStreaming = false, onCopy, onRegenerate, onDelete, onEdit, onBranch }: Props =
+  let { messages, isStreaming = false, onRegenerate, onDelete, onEdit, onBranch }: Props =
     $props();
 
   let viewport: HTMLElement | null = $state(null);
@@ -36,32 +35,17 @@
   }
 
   $effect(() => {
-    const el = viewport;
-    if (!el) return;
-    el.addEventListener("scroll", measureAtBottom, { passive: true });
-    return () => el.removeEventListener("scroll", measureAtBottom);
-  });
-
-  $effect(() => {
     if (!viewport) return;
-    // Track streaming content so deltas trigger scroll, not just message count.
-    const signal = messages.reduce(
-      (n, m) =>
-        n +
-        m.parts.reduce(
-          (p, part) =>
-            p + 1 + ("text" in part && typeof part.text === "string" ? part.text.length : 0),
-          0,
-        ),
-      0,
-    );
-    void signal;
+    // Track the tail of the last message so pure text deltas trigger scroll,
+    // not just message count.
+    const lastPart = messages.at(-1)?.parts.at(-1);
+    void (lastPart && "text" in lastPart ? lastPart.text.length : messages.length);
     if (atBottom) scrollToBottom();
   });
 </script>
 
 <div class="relative flex-1 min-h-0">
-  <ScrollArea class="h-full" bind:viewportRef={viewport}>
+  <ScrollArea class="h-full" bind:viewportRef={viewport} onViewportScroll={measureAtBottom}>
     <div class="mx-auto flex w-full max-w-[52rem] flex-col gap-7 px-4 py-6 sm:px-6">
       {#if messages.length === 0 && !isStreaming}
         <div class="flex flex-col items-center gap-4 py-24 text-center text-muted-foreground">
@@ -74,7 +58,6 @@
           <MessageBubble
             {message}
             streaming={isStreaming && message.id === lastMessageId && message.role === "assistant"}
-            {onCopy}
             {onRegenerate}
             {onDelete}
             {onEdit}

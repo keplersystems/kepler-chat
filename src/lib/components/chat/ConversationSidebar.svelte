@@ -1,12 +1,10 @@
 <script lang="ts">
-  import { tick } from "svelte";
-  import { enhance } from "$app/forms";
-  import { invalidateAll } from "$app/navigation";
+  import { goto, invalidateAll } from "$app/navigation";
   import { page } from "$app/state";
-  import { api } from "$lib/api";
+  import { api, apiErrorMessage } from "$lib/api";
   import { chat } from "$lib/state/chat.svelte";
   import { focusInput } from "$lib/utils";
-  import type { ConversationDTO, ProjectDTO } from "$lib/contracts";
+  import type { ConversationDTO } from "$lib/contracts";
   import { Input } from "$lib/components/ui/input";
   import * as DropdownMenu from "$lib/components/ui/dropdown-menu";
   import * as Tooltip from "$lib/components/ui/tooltip";
@@ -22,7 +20,6 @@
 
   interface Props {
     conversations: ConversationDTO[];
-    projects: ProjectDTO[];
     currentConversationId?: string | null;
     collapsed?: boolean;
     onToggle?: () => void;
@@ -56,13 +53,17 @@
     await invalidateAll();
   }
 
-  let deletingId = $state("");
-  let deleteForm: HTMLFormElement | null = $state(null);
-
   async function handleDelete(conversationId: string) {
-    deletingId = conversationId;
-    await tick();
-    deleteForm?.requestSubmit();
+    const { error } = await api.api.conversations({ id: conversationId }).delete();
+    if (error) {
+      chat.setError(apiErrorMessage(error.value, "Failed to delete conversation"));
+      return;
+    }
+    if (currentConversationId === conversationId) {
+      await goto("/chat", { invalidateAll: true });
+    } else {
+      await invalidateAll();
+    }
   }
 </script>
 
@@ -217,10 +218,6 @@
         {/each}
       </div>
     </div>
-
-    <form method="POST" action="/chat?/delete" use:enhance bind:this={deleteForm} class="hidden">
-      <input type="hidden" name="id" value={deletingId} />
-    </form>
 
     <div class="p-2.5">
       <a

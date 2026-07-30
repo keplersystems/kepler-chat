@@ -1,18 +1,17 @@
 import { Elysia, t } from "elysia";
+import { INSTRUCTIONS_MAX_LENGTH } from "$lib/contracts";
 import { requireAuth } from "$lib/server/auth";
-import { requireProject } from "$lib/server/projects";
-import { deleteSkill, listSkills, upsertSkill } from "$lib/server/skills";
-import type { ConfigScope } from "$lib/server/opencode/config-file";
+import { requireProject, resolveConfigScope } from "$lib/server/projects";
+import {
+  deleteSkill,
+  listSkills,
+  SKILL_NAME_PATTERN,
+  upsertSkill,
+} from "$lib/server/skills";
 
-const skillNameSchema = t.RegExp(/^[a-z0-9]+(-[a-z0-9]+)*$/, {
+const skillNameSchema = t.RegExp(SKILL_NAME_PATTERN, {
   description: "Skill name (lowercase kebab-case)",
 });
-
-async function resolveScope(projectId: string | undefined): Promise<ConfigScope> {
-  if (!projectId) return { kind: "global" };
-  await requireProject(projectId);
-  return { kind: "project", projectId };
-}
 
 export const skillsRoute = new Elysia({ prefix: "/api/skills" })
   .get(
@@ -37,7 +36,7 @@ export const skillsRoute = new Elysia({ prefix: "/api/skills" })
     "/:name",
     async (context) => {
       requireAuth(context);
-      const scope = await resolveScope(context.body.projectId);
+      const scope = await resolveConfigScope(context.body.projectId);
       await upsertSkill(scope, context.params.name, context.body.description, context.body.content);
       return { success: true as const };
     },
@@ -46,7 +45,7 @@ export const skillsRoute = new Elysia({ prefix: "/api/skills" })
       body: t.Object({
         projectId: t.Optional(t.String({ minLength: 1 })),
         description: t.String({ minLength: 1, maxLength: 1024 }),
-        content: t.String({ minLength: 1, maxLength: 65536 }),
+        content: t.String({ minLength: 1, maxLength: INSTRUCTIONS_MAX_LENGTH }),
       }),
       detail: {
         summary: "Create or update skill",
@@ -59,7 +58,7 @@ export const skillsRoute = new Elysia({ prefix: "/api/skills" })
     "/:name",
     async (context) => {
       requireAuth(context);
-      const scope = await resolveScope(context.query.projectId);
+      const scope = await resolveConfigScope(context.query.projectId);
       await deleteSkill(scope, context.params.name);
       return { success: true as const };
     },

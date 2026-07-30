@@ -1,7 +1,9 @@
 import { Elysia, t } from "elysia";
-import { readFile, writeFile } from "node:fs/promises";
+import { writeFile } from "node:fs/promises";
 import { resolve } from "node:path";
+import { INSTRUCTIONS_MAX_LENGTH } from "$lib/contracts";
 import { requireAuth } from "$lib/server/auth";
+import { readFileOrEmpty } from "$lib/server/files";
 import { getSessionsRoot } from "$lib/server/paths";
 
 function instructionsPath(): string {
@@ -13,11 +15,7 @@ export const instructionsRoute = new Elysia({ prefix: "/api/instructions" })
     "/",
     async (context) => {
       requireAuth(context);
-      const content = await readFile(instructionsPath(), "utf8").catch((err) => {
-        if (err.code === "ENOENT") return "";
-        throw err;
-      });
-      return { content };
+      return { content: await readFileOrEmpty(instructionsPath()) };
     },
     {
       detail: {
@@ -35,7 +33,7 @@ export const instructionsRoute = new Elysia({ prefix: "/api/instructions" })
       return { success: true };
     },
     {
-      body: t.Object({ content: t.String({ maxLength: 65536 }) }),
+      body: t.Object({ content: t.String({ maxLength: INSTRUCTIONS_MAX_LENGTH }) }),
       detail: {
         summary: "Update global instructions",
         tags: ["Settings"],

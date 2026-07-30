@@ -7,6 +7,7 @@
     orientation?: "vertical" | "horizontal" | "both";
     viewportClass?: string;
     viewportRef?: HTMLElement | null;
+    onViewportScroll?: (event: Event) => void;
   };
 
   let {
@@ -14,6 +15,7 @@
     orientation = "vertical",
     viewportClass,
     viewportRef = $bindable(null),
+    onViewportScroll,
     type = "hover",
     children,
     ...rest
@@ -25,7 +27,11 @@
   {...rest}
   class={cn("relative overflow-hidden", className)}
 >
-  <ScrollAreaPrimitive.Viewport bind:ref={viewportRef} class={cn("h-full w-full rounded-[inherit]", viewportClass)}>
+  <ScrollAreaPrimitive.Viewport
+    bind:ref={viewportRef}
+    onscroll={onViewportScroll}
+    class={cn("h-full w-full rounded-[inherit]", viewportClass)}
+  >
     {@render children?.()}
   </ScrollAreaPrimitive.Viewport>
   {#if orientation === "vertical" || orientation === "both"}

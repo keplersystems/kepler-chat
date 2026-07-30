@@ -2,6 +2,7 @@
   import { onMount } from "svelte";
   import { fade } from "svelte/transition";
   import { api, apiErrorMessage } from "$lib/api";
+  import { INSTRUCTIONS_MAX_LENGTH } from "$lib/contracts";
   import { Button } from "$lib/components/ui/button";
   import { Textarea } from "$lib/components/ui/input";
   import { ThinkingOrb } from "$lib/components/ui/orb";
@@ -59,7 +60,7 @@
     <Textarea
       bind:value={draft}
       class="min-h-64 font-mono text-sm"
-      maxlength={65536}
+      maxlength={INSTRUCTIONS_MAX_LENGTH}
       aria-label="Global instructions"
     />
     <div class="flex items-center gap-3">

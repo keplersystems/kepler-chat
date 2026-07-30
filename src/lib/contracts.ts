@@ -3,8 +3,10 @@
 // directly from the Elysia App via Eden treaty. SSE payloads are the OpenCode
 // SDK event `properties`, forwarded verbatim by the messages route.
 
-import { z } from "zod";
 import type { Event, PermissionRequest, QuestionRequest } from "@opencode-ai/sdk/v2";
+
+/** Max length for instruction/skill documents, enforced by API schemas and form inputs. */
+export const INSTRUCTIONS_MAX_LENGTH = 65536;
 
 export interface ConversationDTO {
   id: string;
@@ -22,10 +24,6 @@ export interface ProjectDTO {
   updated_at: Date;
 }
 
-export interface CreateConversationInput {
-  title: string;
-}
-
 export interface SendMessageInput {
   text: string;
   model: {
@@ -38,18 +36,6 @@ export interface SendMessageInput {
     mimeType?: string;
     filename?: string;
   }>;
-}
-
-export const permissionReplySchema = z.enum(["once", "always", "reject"]);
-export type PermissionReply = z.infer<typeof permissionReplySchema>;
-
-export interface PermissionRequestReplyInput {
-  reply: PermissionReply;
-  message?: string;
-}
-
-export interface QuestionRequestReplyInput {
-  answers: string[][];
 }
 
 export type PendingRequestDTO =
@@ -88,13 +74,65 @@ export interface ListOutputFilesResponse {
 
 export type FileScope = "input" | "output";
 
-export interface SuccessResponse {
-  success: true;
+export type PermissionAction = "allow" | "ask" | "deny";
+
+export const PERMISSION_TOOLS = [
+  "bash",
+  "edit",
+  "webfetch",
+  "websearch",
+  "codesearch",
+  "external_directory",
+] as const;
+export type PermissionTool = (typeof PERMISSION_TOOLS)[number];
+
+export type PermissionSettings = Record<PermissionTool, PermissionAction>;
+
+export interface UsageDay {
+  day: string;
+  cost: number;
+  tokens: number;
+  messages: number;
 }
 
-// SSE
+export interface UsageModel {
+  providerID: string;
+  modelID: string;
+  cost: number;
+  input: number;
+  output: number;
+  reasoning: number;
+  messages: number;
+}
 
-/** Session-scoped OpenCode events forwarded over the message stream. */
+export interface UsageConversation {
+  id: string;
+  title: string;
+  cost: number;
+  tokens: number;
+  messages: number;
+}
+
+export interface UsageResponse {
+  days: UsageDay[];
+  models: UsageModel[];
+  topConversations: UsageConversation[];
+  totals: { cost: number; tokens: number; messages: number };
+  windowDays: number;
+}
+
+export interface MessageSearchResult {
+  conversationId: string;
+  title: string;
+  role: string;
+  snippet: string;
+  time: number;
+}
+
+/**
+ * Session-scoped OpenCode events forwarded over the message stream.
+ * Only events the web client consumes are forwarded.
+ */
 export const SERVER_EVENT_NAMES = [
   "message.updated",
   "message.removed",
@@ -106,17 +144,10 @@ export const SERVER_EVENT_NAMES = [
   "question.asked",
   "question.replied",
   "question.rejected",
-  "session.created",
   "session.updated",
-  "session.deleted",
-  "session.status",
-  "session.idle",
-  "session.compacted",
-  "session.diff",
   "session.error",
   "todo.updated",
   "command.executed",
-  "tui.session.select",
 ] as const satisfies readonly Event["type"][];
 
 export type ServerEventName = (typeof SERVER_EVENT_NAMES)[number];

@@ -22,14 +22,8 @@ if (!globalThis.__KEPLER_OPENCODE_BOOTED__) {
   process.on("SIGTERM", shutdown);
 }
 
-function isPublicPath(pathname: string): boolean {
-  if (pathname === "/login") return true;
-  if (pathname.startsWith("/api/auth/")) return true;
-  return false;
-}
-
 export const handle: Handle = async ({ event, resolve }) => {
-  if (!isPublicPath(event.url.pathname) && !isAuthenticated(event.request.headers)) {
+  if (event.url.pathname !== "/login" && !isAuthenticated(event.request.headers)) {
     if (event.url.pathname.startsWith("/api/")) {
       return new Response(JSON.stringify({ error: "Unauthorized" }), {
         status: 401,

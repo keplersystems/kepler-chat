@@ -7,12 +7,14 @@ import type {
   UploadFileResponse,
 } from "$lib/contracts";
 import {
+  isEnoent,
   listFilesRecursive,
   lookupMimeType,
   resolveExistingSafeFilePath,
   resolveSafeFilePath,
   statOrNull,
 } from "$lib/server/files";
+import { HttpError } from "$lib/server/http-error";
 import {
   getConversationInputPath,
   getConversationRoot,
@@ -35,7 +37,7 @@ function getConversationScopePath(
 export const filesRoute = new Elysia({ prefix: "/api/conversations" })
   .post(
     "/:id/files/upload",
-    async (context): Promise<UploadFileResponse | { error: string }> => {
+    async (context): Promise<UploadFileResponse> => {
       requireAuth(context);
       const { id } = context.params;
       const { file } = context.body;
@@ -43,10 +45,6 @@ export const filesRoute = new Elysia({ prefix: "/api/conversations" })
       const conv = await requireConversation(id);
 
       await provisionConversationDirectories(conv);
-      if (!(file instanceof File)) {
-        context.set.status = 400;
-        return { error: "Missing file upload" };
-      }
 
       // Every upload lands in the media library (deduplicated) and is
       // hardlinked into the conversation, so reuse costs no space.
@@ -100,7 +98,7 @@ export const filesRoute = new Elysia({ prefix: "/api/conversations" })
   )
   .get(
     "/:id/files/output",
-    async (context): Promise<ListOutputFilesResponse | { error: string }> => {
+    async (context): Promise<ListOutputFilesResponse> => {
       requireAuth(context);
       const { id } = context.params;
       const { prefix } = context.query;
@@ -117,19 +115,16 @@ export const filesRoute = new Elysia({ prefix: "/api/conversations" })
         try {
           startPath = resolveSafeFilePath(workdirPath, prefix);
         } catch {
-          context.set.status = 400;
-          return { error: "Invalid prefix" };
+          throw new HttpError(400, "Invalid prefix");
         }
       }
 
       const startStats = await statOrNull(startPath);
       if (!startStats) {
-        context.set.status = 404;
-        return { error: "Output path not found" };
+        throw new HttpError(404, "Output path not found");
       }
       if (!startStats.isDirectory()) {
-        context.set.status = 400;
-        return { error: "Prefix must point to a directory" };
+        throw new HttpError(400, "Prefix must point to a directory");
       }
 
       const files = await listFilesRecursive(workdirPath, startPath, new Set(["input", "scratchpad"]));
@@ -152,7 +147,7 @@ export const filesRoute = new Elysia({ prefix: "/api/conversations" })
   )
   .get(
     "/:id/files/*",
-    async (context): Promise<Response | { error: string }> => {
+    async (context): Promise<Response> => {
       requireAuth(context);
       const { id } = context.params;
       const filePath = (context.params as { id: string; "*": string })["*"];
@@ -161,8 +156,7 @@ export const filesRoute = new Elysia({ prefix: "/api/conversations" })
       const conv = await requireConversation(id);
 
       if (!filePath || filePath.trim().length === 0) {
-        context.set.status = 400;
-        return { error: "File path is required" };
+        throw new HttpError(400, "File path is required");
       }
 
       const fileScope: FileScope = scope ?? "output";
@@ -172,27 +166,16 @@ export const filesRoute = new Elysia({ prefix: "/api/conversations" })
       try {
         absolutePath = await resolveExistingSafeFilePath(basePath, filePath);
       } catch (error) {
-        if (
-          error &&
-          typeof error === "object" &&
-          "code" in error &&
-          error.code === "ENOENT"
-        ) {
-          context.set.status = 404;
-          return { error: "File not found" };
-        }
-        context.set.status = 400;
-        return { error: "Invalid file path" };
+        if (isEnoent(error)) throw new HttpError(404, "File not found");
+        throw new HttpError(400, "Invalid file path");
       }
 
       const fileStats = await statOrNull(absolutePath);
       if (!fileStats) {
-        context.set.status = 404;
-        return { error: "File not found" };
+        throw new HttpError(404, "File not found");
       }
       if (!fileStats.isFile()) {
-        context.set.status = 400;
-        return { error: "Path does not reference a file" };
+        throw new HttpError(400, "Path does not reference a file");
       }
 
       const target = await readFile(absolutePath);

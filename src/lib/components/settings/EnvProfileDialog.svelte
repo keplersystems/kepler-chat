@@ -61,9 +61,7 @@
                 <span class="ml-1 font-sans text-xs text-muted-foreground">(file)</span>
               {/if}
             </label>
-            {#if field.description}
-              <p class="mb-1 text-xs text-muted-foreground">{field.description}</p>
-            {/if}
+            <p class="mb-1 text-xs text-muted-foreground">{field.description}</p>
             {#if field.inputKind === "file_path"}
               <Input
                 id={field.key}
@@ -77,7 +75,6 @@
                 name={field.key}
                 type={field.inputKind === "secret" ? "password" : "text"}
                 value={initialValues[field.key] ?? ""}
-                placeholder={field.placeholder ?? ""}
                 class="mt-1"
               />
             {/if}

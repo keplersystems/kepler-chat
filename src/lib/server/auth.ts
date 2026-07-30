@@ -1,6 +1,7 @@
 import type { Context } from "elysia";
 import type { Cookies } from "@sveltejs/kit";
 import { env } from "$lib/env";
+import { HttpError } from "$lib/server/http-error";
 import { createHash, timingSafeEqual } from "node:crypto";
 
 const COOKIE_NAME = "kepler_session";
@@ -39,18 +40,8 @@ export function isAuthenticated(headers: Headers): boolean {
 
 export function requireAuth(context: Context): void {
   if (!isAuthenticated(context.request.headers)) {
-    throw new Error("Unauthorized");
+    throw new HttpError(401, "Unauthorized");
   }
-}
-
-export function createAuthCookie(): string {
-  const secure = env.NODE_ENV === "production" ? " Secure;" : "";
-  return `${COOKIE_NAME}=${sessionToken()}; HttpOnly; Path=/; SameSite=Lax;${secure} Max-Age=2592000`;
-}
-
-export function clearAuthCookie(): string {
-  const secure = env.NODE_ENV === "production" ? " Secure;" : "";
-  return `${COOKIE_NAME}=; HttpOnly; Path=/; SameSite=Lax;${secure} Max-Age=0`;
 }
 
 export function setSessionCookie(cookies: Cookies): void {

@@ -1,4 +1,5 @@
 import { Elysia, t } from "elysia";
+import { INSTRUCTIONS_MAX_LENGTH } from "$lib/contracts";
 import { requireAuth } from "$lib/server/auth";
 import {
   createProject,
@@ -83,7 +84,7 @@ export const projectsRoute = new Elysia({ prefix: "/api/projects" })
     },
     {
       params: t.Object({ id: t.String() }),
-      body: t.Object({ content: t.String({ maxLength: 65536 }) }),
+      body: t.Object({ content: t.String({ maxLength: INSTRUCTIONS_MAX_LENGTH }) }),
       detail: {
         summary: "Set project instructions",
         tags: ["Projects"],

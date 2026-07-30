@@ -1,7 +1,6 @@
 import { Elysia } from "elysia";
 import { swagger } from "@elysiajs/swagger";
 import { HttpError } from "./http-error";
-import { authRoute } from "./routes/auth";
 import { conversationsRoute } from "./routes/conversations";
 import { projectsRoute } from "./routes/projects";
 import { messagesRoute } from "./routes/messages";
@@ -40,7 +39,6 @@ export const app = new Elysia()
           { name: "Skills", description: "Skill (SKILL.md) management" },
         ],
       },
-      exclude: ["/api/auth/*"],
     }),
   )
   .onError(({ error, set }) => {
@@ -49,11 +47,9 @@ export const app = new Elysia()
       return { error: error.message };
     }
     console.error(error);
-    const message = "message" in error ? error.message : "Internal Server Error";
-    set.status = message === "Unauthorized" ? 401 : 500;
-    return { error: message };
+    set.status = 500;
+    return { error: "message" in error ? error.message : "Internal Server Error" };
   })
-  .use(authRoute)
   .use(projectsRoute)
   .use(conversationsRoute)
   .use(messagesRoute)

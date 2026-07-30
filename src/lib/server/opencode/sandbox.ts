@@ -3,7 +3,17 @@ import {
   type SandboxRuntimeConfig,
 } from "@anthropic-ai/sandbox-runtime";
 
-export function createSandboxBaseConfig(): SandboxRuntimeConfig {
+/**
+ * `allowedDomains` is deliberately absent: the runtime treats a missing value
+ * as "no network filtering" (policy is enforced via OpenCode permissions to
+ * keep the server reachable on Linux), but the zod-inferred config type marks
+ * the field required.
+ */
+type SandboxBaseConfig = Omit<SandboxRuntimeConfig, "network"> & {
+  network: Omit<SandboxRuntimeConfig["network"], "allowedDomains">;
+};
+
+function createSandboxBaseConfig(): SandboxBaseConfig {
   return {
     filesystem: {
       denyRead: [
@@ -23,8 +33,6 @@ export function createSandboxBaseConfig(): SandboxRuntimeConfig {
       ],
     },
     network: {
-      // Network policy is enforced via OpenCode permissions to keep the server reachable on Linux.
-      allowedDomains: undefined as unknown as string[],
       deniedDomains: [],
       allowLocalBinding: true,
     },
@@ -54,7 +62,9 @@ export async function ensureSandboxInitialized(): Promise<void> {
     );
   }
 
-  sandboxInitPromise = SandboxManager.initialize(createSandboxBaseConfig());
+  sandboxInitPromise = SandboxManager.initialize(
+    createSandboxBaseConfig() as SandboxRuntimeConfig,
+  );
   return sandboxInitPromise;
 }
 
@@ -74,6 +84,3 @@ export async function wrapCommandForSessionsRoot(
     },
   });
 }
-
-export { SandboxManager };
-export type { SandboxRuntimeConfig };

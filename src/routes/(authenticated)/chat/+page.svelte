@@ -30,8 +30,8 @@
   let selectedModel = $state<ModelSelection | null>(null);
 
   $effect(() => {
-    modelCatalog.load().then(() => {
-      if (!selectedModel) selectedModel = modelCatalog.defaultModel();
+    modelCatalog.loadDefault().then((model) => {
+      if (!selectedModel) selectedModel = model;
     });
   });
 

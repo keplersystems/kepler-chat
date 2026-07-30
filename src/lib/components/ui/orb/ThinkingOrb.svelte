@@ -21,7 +21,6 @@
     state?: OrbState;
     size?: OrbSize;
     speed?: number;
-    paused?: boolean;
     class?: string;
     "aria-label"?: string;
   }
@@ -30,7 +29,6 @@
     state: orbState = "working",
     size = 64,
     speed = 1,
-    paused = false,
     class: className,
     "aria-label": ariaLabel,
   }: Props = $props();
@@ -68,7 +66,7 @@
       if (running) raf = requestAnimationFrame(loop);
     };
     const start = () => {
-      if (running || paused) return;
+      if (running) return;
       running = true;
       raf = requestAnimationFrame(loop);
     };

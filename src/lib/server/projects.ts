@@ -1,10 +1,12 @@
-import { readFile, rm, writeFile } from "node:fs/promises";
+import { rm, writeFile } from "node:fs/promises";
 import { resolve } from "node:path";
 import { eq } from "drizzle-orm";
 import { db } from "$lib/server/db/client";
 import { conversation, project } from "$lib/server/db/schema/opencode";
+import { readFileOrEmpty } from "$lib/server/files";
 import { HttpError } from "$lib/server/http-error";
 import { generateId } from "$lib/server/ids";
+import type { ConfigScope } from "$lib/server/opencode/config-file";
 import { opencodeServer } from "$lib/server/opencode/supervisor";
 import {
   getConversationRoot,
@@ -26,6 +28,15 @@ export async function requireProject(id: string) {
   });
   if (!row) throw new HttpError(404, "Project not found");
   return row;
+}
+
+/** Map an optional projectId to a config scope, verifying the project exists. */
+export async function resolveConfigScope(
+  projectId: string | undefined,
+): Promise<ConfigScope> {
+  if (!projectId) return { kind: "global" };
+  await requireProject(projectId);
+  return { kind: "project", projectId };
 }
 
 export async function listProjects() {
@@ -74,12 +85,7 @@ function instructionsPath(projectId: string): string {
 }
 
 export async function getProjectInstructions(projectId: string): Promise<string> {
-  try {
-    return await readFile(instructionsPath(projectId), "utf8");
-  } catch (error) {
-    if ((error as NodeJS.ErrnoException).code === "ENOENT") return "";
-    throw error;
-  }
+  return readFileOrEmpty(instructionsPath(projectId));
 }
 
 export async function setProjectInstructions(

@@ -1,6 +1,6 @@
 <script lang="ts">
   import { api } from "$lib/api";
-  import type { EnvProfile, EnvSchema, NormalizedProvider } from "$lib/types";
+  import type { EnvSchema, NormalizedProvider } from "$lib/types";
   import ProviderCard from "$lib/components/settings/ProviderCard.svelte";
   import EnvProfileDialog from "$lib/components/settings/EnvProfileDialog.svelte";
   import OAuthDialog from "$lib/components/settings/OAuthDialog.svelte";
@@ -45,14 +45,14 @@
       ]);
 
       if (schemaRes.error || !schemaRes.data || "error" in schemaRes.data) return;
-      const schema = schemaRes.data as EnvSchema;
+      const schema = schemaRes.data;
       const profile =
-        profileRes.data && !("error" in profileRes.data) ? (profileRes.data as EnvProfile) : null;
+        profileRes.data && !("error" in profileRes.data) ? profileRes.data : null;
 
       envSchema = schema;
       const initial: Record<string, string> = {};
-      for (const field of schema.envSchema ?? []) {
-        const existing = profile?.values?.find((v) => v.key === field.key);
+      for (const field of schema.envSchema) {
+        const existing = profile?.values.find((v) => v.key === field.key);
         initial[field.key] = existing?.value ?? "";
       }
       envInitialValues = initial;

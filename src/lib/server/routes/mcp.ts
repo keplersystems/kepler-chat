@@ -1,6 +1,6 @@
 import { Elysia, t } from "elysia";
 import { requireAuth } from "$lib/server/auth";
-import { requireProject } from "$lib/server/projects";
+import { requireProject, resolveConfigScope } from "$lib/server/projects";
 import {
   completeMcpAuth,
   listMcpServers,
@@ -9,7 +9,6 @@ import {
   startMcpAuth,
   upsertMcpServer,
 } from "$lib/server/mcp";
-import type { ConfigScope } from "$lib/server/opencode/config-file";
 
 const mcpNameSchema = t.RegExp(/^[a-zA-Z0-9][a-zA-Z0-9_-]*$/, {
   description: "MCP server name",
@@ -39,12 +38,6 @@ const mcpConfigSchema = t.Union([
   }),
 ]);
 
-async function resolveScope(projectId: string | undefined): Promise<ConfigScope> {
-  if (!projectId) return { kind: "global" };
-  await requireProject(projectId);
-  return { kind: "project", projectId };
-}
-
 export const mcpRoute = new Elysia({ prefix: "/api/mcp" })
   .get(
     "/",
@@ -67,7 +60,7 @@ export const mcpRoute = new Elysia({ prefix: "/api/mcp" })
     "/:name",
     async (context) => {
       requireAuth(context);
-      const scope = await resolveScope(context.body.projectId);
+      const scope = await resolveConfigScope(context.body.projectId);
       await upsertMcpServer(scope, context.params.name, context.body.config);
       return { success: true as const };
     },
@@ -89,7 +82,7 @@ export const mcpRoute = new Elysia({ prefix: "/api/mcp" })
     "/:name",
     async (context) => {
       requireAuth(context);
-      const scope = await resolveScope(context.query.projectId);
+      const scope = await resolveConfigScope(context.query.projectId);
       await removeMcpServer(scope, context.params.name);
       return { success: true as const };
     },
@@ -107,7 +100,7 @@ export const mcpRoute = new Elysia({ prefix: "/api/mcp" })
     "/:name/auth",
     async (context) => {
       requireAuth(context);
-      const scope = await resolveScope(context.body.projectId);
+      const scope = await resolveConfigScope(context.body.projectId);
       const origin = new URL(context.request.url).origin;
       return startMcpAuth(scope, context.params.name, origin);
     },
@@ -125,7 +118,7 @@ export const mcpRoute = new Elysia({ prefix: "/api/mcp" })
     "/:name/auth",
     async (context) => {
       requireAuth(context);
-      const scope = await resolveScope(context.query.projectId);
+      const scope = await resolveConfigScope(context.query.projectId);
       await removeMcpAuth(scope, context.params.name);
       return { success: true as const };
     },

@@ -3,17 +3,16 @@
   import { fade } from 'svelte/transition';
   import { page } from '$app/state';
   import ConversationSidebar from './ConversationSidebar.svelte';
-  import type { ConversationDTO, ProjectDTO } from '$lib/contracts';
+  import type { ConversationDTO } from '$lib/contracts';
   import PanelLeftIcon from '@lucide/svelte/icons/panel-left';
 
   interface Props {
     children: Snippet;
     conversations: ConversationDTO[];
-    projects: ProjectDTO[];
     currentConversationId?: string | null;
   }
 
-  let { children, conversations, projects, currentConversationId }: Props = $props();
+  let { children, conversations, currentConversationId }: Props = $props();
 
   const LEFT_SIDEBAR_STORAGE_KEY = 'kepler:chat:left-sidebar-collapsed';
 
@@ -65,7 +64,6 @@
   >
     <ConversationSidebar
       {conversations}
-      {projects}
       {currentConversationId}
       collapsed={isSidebarCollapsed}
       onToggle={() => (isSidebarCollapsed = !isSidebarCollapsed)}

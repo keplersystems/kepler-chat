@@ -1,4 +1,4 @@
-import { lstat, readdir, realpath, stat } from "node:fs/promises";
+import { lstat, readdir, readFile, realpath, stat } from "node:fs/promises";
 import { basename, extname, normalize, relative, resolve, sep } from "node:path";
 import type { FileEntryDTO } from "$lib/contracts";
 
@@ -20,6 +20,15 @@ const MIME_TYPES: Record<string, string> = {
   ".webp": "image/webp",
   ".xml": "application/xml; charset=utf-8",
 };
+
+export function isEnoent(error: unknown): boolean {
+  return (
+    error !== null &&
+    typeof error === "object" &&
+    "code" in error &&
+    error.code === "ENOENT"
+  );
+}
 
 function assertSubpath(basePath: string, targetPath: string): void {
   if (targetPath === basePath) {
@@ -120,12 +129,7 @@ export async function resolveAvailableFilePath(
       await lstat(absolutePath);
       index += 1;
     } catch (error) {
-      if (
-        error &&
-        typeof error === "object" &&
-        "code" in error &&
-        error.code === "ENOENT"
-      ) {
+      if (isEnoent(error)) {
         return { absolutePath, relativePath: candidate };
       }
       throw error;
@@ -133,18 +137,20 @@ export async function resolveAvailableFilePath(
   }
 }
 
+export async function readFileOrEmpty(path: string): Promise<string> {
+  try {
+    return await readFile(path, "utf8");
+  } catch (error) {
+    if (isEnoent(error)) return "";
+    throw error;
+  }
+}
+
 export async function statOrNull(path: string) {
   try {
     return await stat(path);
   } catch (error) {
-    if (
-      error &&
-      typeof error === "object" &&
-      "code" in error &&
-      error.code === "ENOENT"
-    ) {
-      return null;
-    }
+    if (isEnoent(error)) return null;
     throw error;
   }
 }

@@ -15,17 +15,14 @@
   const { provider, onOpenEnv }: Props = $props();
 
   const status = $derived(getStatus(provider));
-  const configuredCount = $derived(provider.envProfileStatus?.configuredCount ?? 0);
-  const totalCount = $derived(provider.envProfileStatus?.totalCount ?? 0);
-  const fullyConfigured = $derived(
-    configuredCount > 0 && configuredCount === totalCount && totalCount > 0,
-  );
+  const configuredCount = $derived(provider.envProfileStatus.configuredCount);
+  const fullyConfigured = $derived(provider.envProfileStatus.ready);
 
   function getStatus(p: NormalizedProvider): { label: string; dot: string } {
-    if (p.connected) return { label: "Ready", dot: "bg-primary" };
-    const { configuredCount: cc = 0, totalCount: tc = 0 } = p.envProfileStatus ?? {};
-    if (cc === tc && tc > 0) return { label: "Ready", dot: "bg-primary" };
-    if (cc > 0) return { label: "Partially configured", dot: "bg-muted-foreground" };
+    if (p.connected || p.envProfileStatus.ready) return { label: "Ready", dot: "bg-primary" };
+    if (p.envProfileStatus.configuredCount > 0) {
+      return { label: "Partially configured", dot: "bg-muted-foreground" };
+    }
     return { label: "Not configured", dot: "bg-muted-foreground/40" };
   }
 </script>
@@ -54,10 +51,8 @@
               OAuth authentication
             {:else if provider.authMode === "api_key"}
               API key authentication
-            {:else if provider.authMode === "manual_env"}
-              Environment variables
             {:else}
-              No authentication required
+              Environment variables
             {/if}
             <span class="inline-flex items-center gap-1.5 text-xs">
               <span class="h-1.5 w-1.5 rounded-full {status.dot}" aria-hidden="true"></span>
@@ -91,7 +86,7 @@
                 {/each}
               </div>
             </div>
-          {:else if provider.authMode === "api_key" || provider.authMode === "manual_env"}
+          {:else}
             <div class="space-y-2">
               {#if fullyConfigured}
                 <div class="flex items-center justify-between gap-3">
@@ -115,10 +110,10 @@
                 <div class="space-y-2">
                   <p class="text-sm font-medium">Partially configured</p>
                   <p class="font-mono text-xs text-muted-foreground">
-                    Configured: {provider.envProfileStatus?.configuredKeys.join(", ")}
+                    Configured: {provider.envProfileStatus.configuredKeys.join(", ")}
                   </p>
                   <p class="font-mono text-xs text-destructive">
-                    Missing: {provider.envProfileStatus?.missingKeys.join(", ")}
+                    Missing: {provider.envProfileStatus.missingKeys.join(", ")}
                   </p>
                   <Button size="sm" onclick={() => onOpenEnv(provider)}>Complete Setup</Button>
                 </div>
@@ -132,8 +127,6 @@
                 </div>
               {/if}
             </div>
-          {:else}
-            <p class="text-sm text-muted-foreground">No authentication required</p>
           {/if}
         </div>
       </div>

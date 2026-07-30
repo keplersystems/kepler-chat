@@ -2,7 +2,7 @@
   import { enhance } from "$app/forms";
   import { invalidateAll } from "$app/navigation";
   import { api, apiErrorMessage } from "$lib/api";
-  import type { ConversationDTO, ProjectDTO } from "$lib/contracts";
+  import type { ConversationDTO, MessageSearchResult, ProjectDTO } from "$lib/contracts";
   import { relativeTime } from "$lib/utils";
   import { Button, buttonVariants } from "$lib/components/ui/button";
   import { Checkbox } from "$lib/components/ui/checkbox";
@@ -16,16 +16,8 @@
 
   const { data }: Props = $props();
 
-  interface MessageResult {
-    conversationId: string;
-    title: string;
-    role: string;
-    snippet: string;
-    time: number;
-  }
-
   let query = $state("");
-  let messageResults = $state<MessageResult[]>([]);
+  let messageResults = $state<MessageSearchResult[]>([]);
   let searchTimer: ReturnType<typeof setTimeout>;
 
   $effect(() => {
@@ -37,7 +29,7 @@
     }
     searchTimer = setTimeout(async () => {
       const { data: response, error } = await api.api.search.get({ query: { q } });
-      if (!error && response) messageResults = response.results as MessageResult[];
+      if (!error && response) messageResults = response.results;
     }, 200);
     return () => clearTimeout(searchTimer);
   });

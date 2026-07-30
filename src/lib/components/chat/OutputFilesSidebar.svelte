@@ -9,16 +9,19 @@
     conversationId: string;
     files: FileEntryDTO[];
     collapsed: boolean;
-    onRefresh: () => void;
+    onRefresh: () => Promise<void>;
   }
 
   let { conversationId, files, collapsed = $bindable(), onRefresh }: Props = $props();
   let refreshing = $state(false);
 
-  function triggerRefresh() {
+  async function triggerRefresh() {
     refreshing = true;
-    onRefresh();
-    setTimeout(() => (refreshing = false), 600);
+    try {
+      await onRefresh();
+    } finally {
+      refreshing = false;
+    }
   }
 </script>
 

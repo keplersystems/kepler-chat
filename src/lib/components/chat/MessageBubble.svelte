@@ -1,5 +1,5 @@
 <script lang="ts">
-  import type { MessageView } from "$lib/state/chat.svelte";
+  import type { MessageView } from "$lib/messages";
   import { isAbnormalFinish, messageText } from "$lib/messages";
   import Markdown from "$lib/components/markdown/Markdown.svelte";
   import ToolCallCard from "./parts/ToolCallCard.svelte";
@@ -24,14 +24,13 @@
     message: MessageView;
     /** True while this message is the one currently being generated. */
     streaming?: boolean;
-    onCopy?: (message: MessageView) => void;
     onRegenerate?: (message: MessageView) => void;
     onDelete?: (message: MessageView) => void;
     onEdit?: (message: MessageView, text: string) => void;
     onBranch?: (message: MessageView) => void;
   }
 
-  let { message, streaming = false, onCopy, onRegenerate, onDelete, onEdit, onBranch }: Props =
+  let { message, streaming = false, onRegenerate, onDelete, onEdit, onBranch }: Props =
     $props();
 
   let copied = $state(false);
@@ -67,7 +66,6 @@
     } catch (err) {
       console.error("Failed to copy:", err);
     }
-    onCopy?.(message);
   }
 </script>
 
@@ -158,7 +156,6 @@
     </div>
   {/if}
 
-  <!-- Footer: metadata (always visible) + action row (revealed on hover) -->
   <div
     class="mt-1.5 flex items-center gap-3 text-xs text-muted-foreground {isUser
       ? 'flex-row-reverse'

@@ -1,20 +1,8 @@
 import { readFile, writeFile } from "node:fs/promises";
 import { resolve } from "node:path";
+import type { PermissionSettings } from "$lib/contracts";
+import { isEnoent } from "$lib/server/files";
 import { getSessionsRoot } from "$lib/server/paths";
-
-export type PermissionAction = "allow" | "ask" | "deny";
-
-export const PERMISSION_TOOLS = [
-  "bash",
-  "edit",
-  "webfetch",
-  "websearch",
-  "codesearch",
-  "external_directory",
-] as const;
-export type PermissionTool = (typeof PERMISSION_TOOLS)[number];
-
-export type PermissionSettings = Record<PermissionTool, PermissionAction>;
 
 export const PERMISSION_DEFAULTS: PermissionSettings = {
   bash: "allow",
@@ -31,7 +19,7 @@ function permissionsPath(): string {
 
 export async function readPermissionSettings(): Promise<PermissionSettings> {
   const raw = await readFile(permissionsPath(), "utf8").catch((err) => {
-    if (err.code === "ENOENT") return null;
+    if (isEnoent(err)) return null;
     throw err;
   });
   if (!raw) return { ...PERMISSION_DEFAULTS };

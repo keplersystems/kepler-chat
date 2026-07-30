@@ -1,6 +1,136 @@
 # Work Log
 
-## 2026-07-30 afternoon session: design rebuild (v2)
+## 2026-07-30 night session: stream reattach + palette full-text search
+
+Two features, both browser-verified end to end (send → hard reload mid-generation →
+reloaded page shows Stop button and finishes the stream; Ctrl+K "lighthouse" → Message
+entries with snippets → Enter navigates).
+
+- **Stream reattach**: generations used to be lost to the tab that started them; the
+  prompt keeps running in OpenCode but nothing re-streamed it after a reload.
+  Server (`server/messages.ts`): `activeGenerations` map keyed by conversation id —
+  the prompt promise resolves when OpenCode finishes even if the requesting client
+  disconnected, so it stays accurate; shared `titleSync`/`forwardSessionEvents`
+  extracted from `sendMessageStream`; new `attachMessageStream` behind
+  `GET /:id/messages/live` (204 when idle; subscription also ends when the tracked
+  generation settles, covering prompts that fail without a terminal event).
+  Client: `chat.attach()` reuses the same reducer with `input: null` (no user echo —
+  persisted messages already have it); chat page auto-attaches on conversation mount
+  (untracked `isStreamingFor` read so stream completions don't re-probe); the
+  persisted/streaming merge now lets streaming copies win so a reattached stream
+  updates the partially-persisted assistant message in place.
+- **Palette search**: CommandPalette now debounces (200ms, min 2 chars) into the
+  existing `/api/search` and appends up to 6 Message entries (title + snippet) after
+  the nav/title matches.
+
+Crash fix (user hit on refresh): client disconnect reaches the SSE stream twice — the
+request signal aborts AND the runtime cancels the ReadableStream, closing the controller
+itself — so `controller.close()` in the abort handler threw ERR_INVALID_STATE and killed
+the dev server. Latent since before the refactor; reattach made mid-run refreshes routine.
+Fixed in `sseStreamResponse` (now the shared scaffolding for send + attach): a `cancel()`
+hook marks the stream closed, and close/enqueue are gated on `controller.desiredSize`.
+Verified: three consecutive mid-generation refreshes, all reattached, server alive, no
+ERR_INVALID_STATE in the log.
+
+Handoff: reattach state is in-memory — a Kepler server restart forgets in-flight
+generations (OpenCode finishes them; the result appears on next load).
+
+Later same night: user confirmed reattach working; all test files, vitest.config.ts, and
+the vitest dep were removed on user request (no test suite in this repo anymore).
+
+Reattach rewrite (user report: after reload only newly-streamed text showed; old
+content and pending tool calls vanished until the run finished). Root cause proven via
+raw /live dump: OpenCode's message store flushes part text only at part boundaries, so
+an in-flight part reads `text: ""` from `session.messages` — no snapshot can recover
+already-streamed text; it exists only on the delta stream, which died with the original
+request. Fix: the event pump is now owned by the server-side generation, not the HTTP
+request. `startGeneration` (in server/messages.ts) subscribes, prompts, persists titles,
+and appends every forwarded envelope to a per-generation event log; `sendMessageStream`
+and `attachMessageStream` are both `subscribeGeneration` consumers that replay the log
+(replay + listener registration is synchronous — no gap) and then follow live. A second
+concurrent send now 409s. Verified: /live 8s into a run replayed all 166 deltas from
+token one; browser reload during a PENDING `write` tool kept the tool card + prior
+content visible within 1.5s, and the run completed (tool COMPLETED) on the reloaded page.
+
+Fixed every finding from the evening review. Verified: svelte-check 0 errors, 30 vitest
+tests pass (10 new reducer tests), production build clean, `drizzle-kit push` applied,
+and a full browser walkthrough (login, all pages, model picker, send/stream, error+retry,
+draft restore). WHY per change is in the review entry below; WHAT changed:
+
+- **Server services**: new `server/providers.ts` (catalog cache typed via SDK
+  `ProviderListResponse`, requireProvider uses cache, one credential path) and
+  `server/messages.ts` (model validation + SSE streaming; shared by messages/models
+  routes — models PUT now also enforces the `connected` check). Routes are thin.
+- **Deleted dead code**: `/api/auth` route (login/logout are SvelteKit actions; also
+  removed createAuthCookie/clearAuthCookie + hooks exemption), `providerCredential` +
+  `conversationMessageModel` tables (dropped via db push; mirror flow removed),
+  `provider-models.ts`, schema barrel (client.ts imports `./schema/opencode`),
+  dead contracts/types exports (zod dep now unused by contracts), `@tanstack/svelte-form`,
+  dead props (onCopy/projects/paused), DropdownMenu.Label, Select.Value, checkbox class.
+- **Crypto**: `opencode/provider-env.ts` now uses `crypto.ts` (single AES-GCM impl,
+  single key fn) and owns `isFilePathEnvKey`/`isSecretLikeEnvKey`/`decryptEnvProfileValue`.
+- **Errors**: everything throws `HttpError` (requireAuth → 401; app.ts no longer
+  string-matches); `isEnoent`/`readFileOrEmpty` helpers in files.ts.
+- **Contracts**: usage/search/permissions shapes + `PERMISSION_TOOLS` +
+  `INSTRUCTIONS_MAX_LENGTH` live in contracts.ts; client provider types are SDK
+  re-exports (`Model as ProviderModel`); SSE contract narrowed to consumed events
+  (session.error now surfaces via `chat.setError`); requests route returns
+  `PendingRequestDTO[]`.
+- **Client state**: pure reducer `state/stream.ts` (+ tests in stream.test.ts; the
+  misnamed chat.svelte.test.ts is now messages.test.ts), notification side effect in
+  `notifications.ts`, shared `state/attachments.ts` uploadAttachments, providers store
+  surfaces load errors + safe localStorage reads + `loadDefault()` used by all 3 pages.
+- **Components**: shared `components/manager/` (list shell, form dialog, confirm-delete
+  dialog, `createManagerState`) backing SkillManager + McpServerManager (Mcp uses
+  ui/Toggle now); `ModelPicker.svelte` + pure `model-options.ts` extracted from
+  MessageInput (724→~430 lines; single 240px textarea cap, chip snippet, setDraft);
+  ui/Badge added; MessageList O(1) autoscroll + ScrollArea onViewportScroll;
+  ConversationSidebar deletes via API client (hidden form + `?/delete` action removed);
+  FilePanel empty state; OutputFilesSidebar awaits refresh.
+- **Silent failures fixed**: media upload/delete errors, sidebar layout load throws 500,
+  auto-compact load/save errors with retry, `formatSize` in utils.
+- Load-strategy split kept deliberately: settings/providers needs +page.server.ts for
+  form actions; other settings pages client-fetch with the same API client they mutate
+  through.
+
+Handoff: `.env` DATABASE_URL resolves to `../../local.db` (repo-root local.db is stale,
+April). zhipuai GLM sends were failing upstream during verification ("Failed to send
+prompt" — error+retry UI confirmed working); streaming happy path verified with
+opencode/DeepSeek free.
+
+## 2026-07-30 evening session: lean-codebase review (no code changes)
+
+Full-code review for separation of concerns, duplication, verbosity, hacks, dead code.
+Four parallel review agents (server, client lib/state, components, routes+cross-cutting);
+all findings verified with greps before reporting. Overall verdict: disciplined codebase
+(no TODO debris, no debug logs, no timing hacks), but lean-ness debt is concentrated in
+a few god files and client/server duplication. Top items for a fix session:
+
+1. `routes/providers.ts` (685 lines) is the only domain without a service layer — DB,
+   crypto, caching, fs all inline in handlers. Extract a providers service.
+2. Secret/crypto logic triplicated: `opencode/provider-env.ts` reimplements
+   `getCredentialKey` + AES-GCM decrypt from `crypto.ts` and duplicates
+   `isFilePathEnvKey` from providers.ts verbatim. Drift here is a security bug vector.
+3. `routes/messages.ts` POST is a ~240-line handler; model-validation+persist logic also
+   duplicated with `routes/models.ts` (already diverged on the `connected` check).
+4. `SkillManager.svelte` / `McpServerManager.svelte` are the same CRUD-manager component
+   written twice. Extract shared list-shell + dialogs + state machine.
+5. `MessageInput.svelte` (724 lines): model picker (~300 lines) should be its own component.
+6. `chat.svelte.ts` `send()` inlines a 190-line SSE reducer (untestable);
+   `chat.svelte.test.ts` actually tests `messages.ts` — streaming path has zero tests.
+7. Client/server type drift: hand-written types in `types.ts` + `as` casts defeat Eden
+   treaty inference (providers settings shapes already diverged); permissions page
+   `as never`; usage/search pages re-declare response shapes locally.
+8. Attachment-upload loop copy-pasted between `state/start-chat.ts` and
+   `chat/[id]/+page.svelte` (error handling already diverged).
+9. Dead: `conversationMessageModel` table (write-only), `mirroredCredentials` flow,
+   several `contracts.ts` exports (keeping zod alive), `@tanstack/svelte-form` dep,
+   db schema barrel, dead props (`onCopy`, `projects`, `paused`).
+
+Full ranked findings were reported in-chat this session; smaller items include an
+`isEnoent` helper (9 sites), `resolveScope` dup (mcp/skills routes), `formatSize` dup,
+non-timing-safe passcode compare in `routes/auth.ts:22`, and silent-failure paths
+(media upload loop, providers catalog load, sidebar layout load).
 
 User verdict on the night session's "observatory" UI: worse than shadcn, dead, 2023 slop.
 New references added in `references/`: **ClaudeSite** screenshots (the quality bar),

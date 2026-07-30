@@ -5,6 +5,7 @@
   import * as Dialog from '$lib/components/ui/dialog';
   import * as DropdownMenu from '$lib/components/ui/dropdown-menu';
   import { downloadFileUrl } from '$lib/api';
+  import { formatSize } from '$lib/utils';
   import type { Component } from 'svelte';
   import DownloadIcon from '@lucide/svelte/icons/download';
   import EyeIcon from '@lucide/svelte/icons/eye';
@@ -21,14 +22,6 @@
   let { conversationId, files }: Props = $props();
   let previewOpen = $state(false);
   let previewFile = $state<FileEntryDTO | null>(null);
-
-  function formatSize(bytes: number): string {
-    if (bytes === 0) return '0 B';
-    const k = 1024;
-    const sizes = ['B', 'KB', 'MB', 'GB'];
-    const i = Math.floor(Math.log(bytes) / Math.log(k));
-    return parseFloat((bytes / Math.pow(k, i)).toFixed(1)) + ' ' + sizes[i];
-  }
 
   function formatDate(dateStr: string): string {
     const date = new Date(dateStr);
@@ -68,7 +61,9 @@
   }
 </script>
 
-{#if files.length > 0}
+{#if files.length === 0}
+  <p class="px-3 py-6 text-center text-xs text-muted-foreground">No generated files yet.</p>
+{:else}
   <div class="h-full space-y-0.5 overflow-y-auto px-2 py-2">
     {#each files as file (file.path)}
       {@const FileIconComponent = getFileIcon(file.path)}

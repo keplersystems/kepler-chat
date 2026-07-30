@@ -7,11 +7,7 @@ import {
   replyPermission as replyPermissionService,
   replyQuestion as replyQuestionService,
 } from "$lib/server/requests";
-import type { PermissionRequest, QuestionRequest } from "@opencode-ai/sdk/v2";
-
-type PendingRequest =
-  | { type: "permission"; request: PermissionRequest }
-  | { type: "question"; request: QuestionRequest };
+import type { PendingRequestDTO } from "$lib/contracts";
 
 const permissionReplySchema = t.Union([
   t.Literal("once"),
@@ -36,7 +32,7 @@ export const requestsRoute = new Elysia({ prefix: "/api/conversations" })
       if (questionError || !questions) throw new Error("Failed to fetch questions");
 
       const sessionID = conv.opencode_session_id;
-      const requests: PendingRequest[] = [
+      const requests: PendingRequestDTO[] = [
         ...permissions
           .filter((r) => r.sessionID === sessionID)
           .map((r) => ({ type: "permission" as const, request: r })),

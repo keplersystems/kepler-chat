@@ -1,9 +1,20 @@
 import { Elysia, t } from "elysia";
+import { PERMISSION_TOOLS, type PermissionTool } from "$lib/contracts";
 import { requireAuth } from "$lib/server/auth";
-import { readPermissionSettings, writePermissionSettings } from "$lib/server/permissions";
+import {
+  readPermissionSettings,
+  writePermissionSettings,
+} from "$lib/server/permissions";
 import { opencodeServer } from "$lib/server/opencode/supervisor";
 
 const action = t.Union([t.Literal("allow"), t.Literal("ask"), t.Literal("deny")]);
+
+const permissionsSchema = t.Object(
+  Object.fromEntries(PERMISSION_TOOLS.map((tool) => [tool, action])) as Record<
+    PermissionTool,
+    typeof action
+  >,
+);
 
 export const permissionsRoute = new Elysia({ prefix: "/api/permissions" })
   .get(
@@ -31,14 +42,7 @@ export const permissionsRoute = new Elysia({ prefix: "/api/permissions" })
     },
     {
       body: t.Object({
-        permissions: t.Object({
-          bash: action,
-          edit: action,
-          webfetch: action,
-          websearch: action,
-          codesearch: action,
-          external_directory: action,
-        }),
+        permissions: permissionsSchema,
       }),
       detail: {
         summary: "Update tool permissions",

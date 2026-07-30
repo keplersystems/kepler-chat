@@ -5,8 +5,7 @@ import Item from "./select-item.svelte";
 import Trigger from "./select-trigger.svelte";
 
 const Root = SelectPrimitive.Root;
-const Value = SelectPrimitive.Value;
 const Group = SelectPrimitive.Group;
 const GroupHeading = SelectPrimitive.GroupHeading;
 
-export { Content, Group, GroupHeading, Item, Root, Trigger, Value };
+export { Content, Group, GroupHeading, Item, Root, Trigger };

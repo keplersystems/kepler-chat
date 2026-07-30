@@ -5,7 +5,6 @@ import {
   primaryKey,
   sqliteTable,
   text,
-  uniqueIndex,
 } from "drizzle-orm/sqlite-core";
 
 export const project = sqliteTable("project", {
@@ -53,44 +52,6 @@ export const conversation = sqliteTable(
   (table) => [index("conversation_project_idx").on(table.project_id)],
 );
 
-export const providerCredential = sqliteTable("provider_credential", {
-  provider_id: text("provider_id").primaryKey(),
-  auth_type: text("auth_type").notNull(),
-  encrypted_payload: text("encrypted_payload").notNull(),
-  iv: text("iv").notNull(),
-  auth_tag: text("auth_tag").notNull(),
-  key_version: integer("key_version").notNull().default(1),
-  created_at: integer("created_at", { mode: "timestamp_ms" })
-    .default(sql`(cast(unixepoch('subsecond') * 1000 as integer))`)
-    .notNull(),
-  updated_at: integer("updated_at", { mode: "timestamp_ms" })
-    .default(sql`(cast(unixepoch('subsecond') * 1000 as integer))`)
-    .$onUpdate(() => new Date())
-    .notNull(),
-});
-
-export const conversationMessageModel = sqliteTable(
-  "conversation_message_model",
-  {
-    conversation_id: text("conversation_id")
-      .notNull()
-      .references(() => conversation.id, { onDelete: "cascade" }),
-    opencode_message_id: text("opencode_message_id").notNull(),
-    provider_id: text("provider_id").notNull(),
-    model_id: text("model_id").notNull(),
-    created_at: integer("created_at", { mode: "timestamp_ms" })
-      .default(sql`(cast(unixepoch('subsecond') * 1000 as integer))`)
-      .notNull(),
-  },
-  (table) => [
-    uniqueIndex("conversation_message_model_msg_uidx").on(
-      table.conversation_id,
-      table.opencode_message_id,
-    ),
-    index("conversation_message_model_conversation_idx").on(table.conversation_id),
-  ],
-);
-
 export const providerEnvProfile = sqliteTable(
   "provider_env_profile",
   {
@@ -118,20 +79,9 @@ export const projectRelations = relations(project, ({ many }) => ({
   conversations: many(conversation),
 }));
 
-export const conversationRelations = relations(conversation, ({ one, many }) => ({
+export const conversationRelations = relations(conversation, ({ one }) => ({
   project: one(project, {
     fields: [conversation.project_id],
     references: [project.id],
   }),
-  messageModels: many(conversationMessageModel),
 }));
-
-export const conversationMessageModelRelations = relations(
-  conversationMessageModel,
-  ({ one }) => ({
-    conversation: one(conversation, {
-      fields: [conversationMessageModel.conversation_id],
-      references: [conversation.id],
-    }),
-  }),
-);

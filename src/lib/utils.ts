@@ -17,6 +17,14 @@ export function focusInput(node: HTMLElement) {
   });
 }
 
+export function formatSize(bytes: number): string {
+  if (bytes === 0) return "0 B";
+  const k = 1024;
+  const sizes = ["B", "KB", "MB", "GB"];
+  const i = Math.floor(Math.log(bytes) / Math.log(k));
+  return parseFloat((bytes / Math.pow(k, i)).toFixed(1)) + " " + sizes[i];
+}
+
 export function relativeTime(value: Date | string | number): string {
   const then = new Date(value).getTime();
   const seconds = Math.round((Date.now() - then) / 1000);

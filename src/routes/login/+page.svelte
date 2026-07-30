@@ -38,7 +38,7 @@
           autocomplete="current-password"
           required
           aria-invalid={form?.error ? true : undefined}
-          class={shaking ? "is-shaking is-error border-destructive/60" : ""}
+          class={shaking ? "is-shaking border-destructive/60" : ""}
         />
         {#if form?.error}
           <p class="text-sm text-destructive" role="alert">{form.error}</p>

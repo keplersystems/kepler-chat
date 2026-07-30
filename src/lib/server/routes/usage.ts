@@ -1,4 +1,5 @@
 import { Elysia } from "elysia";
+import type { UsageResponse } from "$lib/contracts";
 import { db } from "$lib/server/db/client";
 import { requireAuth } from "$lib/server/auth";
 import { usageByDay, usageByModel, usageBySession } from "$lib/server/opencode-db";
@@ -7,7 +8,7 @@ const DAYS = 30;
 
 export const usageRoute = new Elysia({ prefix: "/api/usage" }).get(
   "/",
-  async (context) => {
+  async (context): Promise<UsageResponse> => {
     requireAuth(context);
     const since = Date.now() - DAYS * 86_400_000;
     const [days, models, sessions, conversations] = await Promise.all([

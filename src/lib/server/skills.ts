@@ -1,5 +1,6 @@
 import { mkdir, readFile, rm, writeFile } from "node:fs/promises";
 import { resolve } from "node:path";
+import { isEnoent } from "$lib/server/files";
 import { HttpError } from "$lib/server/http-error";
 import { opencodeServer } from "$lib/server/opencode/supervisor";
 import { configScopeDir, type ConfigScope } from "$lib/server/opencode/config-file";
@@ -27,8 +28,16 @@ function skillsDir(scope: ConfigScope): string {
     : resolve(configScopeDir(scope), ".opencode", "skills");
 }
 
+/** Names become filesystem paths; reject anything but kebab-case up front. */
+function skillDir(scope: ConfigScope, name: string): string {
+  if (!SKILL_NAME_PATTERN.test(name)) {
+    throw new HttpError(400, "Skill name must be lowercase kebab-case");
+  }
+  return resolve(skillsDir(scope), name);
+}
+
 function skillFilePath(scope: ConfigScope, name: string): string {
-  return resolve(skillsDir(scope), name, "SKILL.md");
+  return resolve(skillDir(scope, name), "SKILL.md");
 }
 
 function serializeSkill(name: string, description: string, content: string): string {
@@ -92,9 +101,6 @@ export async function upsertSkill(
   description: string,
   content: string,
 ): Promise<void> {
-  if (!SKILL_NAME_PATTERN.test(name)) {
-    throw new HttpError(400, "Skill name must be lowercase kebab-case");
-  }
   const path = skillFilePath(scope, name);
   await mkdir(resolve(path, ".."), { recursive: true });
   await writeFile(path, serializeSkill(name, description, content), "utf8");
@@ -108,7 +114,7 @@ export async function readSkill(
   try {
     return parseSkill(await readFile(skillFilePath(scope, name), "utf8"));
   } catch (error) {
-    if ((error as NodeJS.ErrnoException).code === "ENOENT") {
+    if (isEnoent(error)) {
       throw new HttpError(404, "Skill not found");
     }
     throw error;
@@ -116,10 +122,7 @@ export async function readSkill(
 }
 
 export async function deleteSkill(scope: ConfigScope, name: string): Promise<void> {
-  if (!SKILL_NAME_PATTERN.test(name)) {
-    throw new HttpError(400, "Skill name must be lowercase kebab-case");
-  }
   await readSkill(scope, name);
-  await rm(resolve(skillsDir(scope), name), { recursive: true });
+  await rm(skillDir(scope, name), { recursive: true });
   await disposeScope(scope);
 }

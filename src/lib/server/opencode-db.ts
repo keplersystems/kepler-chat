@@ -1,5 +1,6 @@
 import { resolve } from "node:path";
 import { createClient, type Client } from "@libsql/client";
+import type { UsageDay, UsageModel } from "$lib/contracts";
 import { getSessionsRoot } from "$lib/server/paths";
 
 /**
@@ -14,23 +15,6 @@ function opencodeDb(): Client {
     client = createClient({ url: `file:${path}` });
   }
   return client;
-}
-
-export interface UsageDay {
-  day: string;
-  cost: number;
-  tokens: number;
-  messages: number;
-}
-
-export interface UsageModel {
-  providerID: string;
-  modelID: string;
-  cost: number;
-  input: number;
-  output: number;
-  reasoning: number;
-  messages: number;
 }
 
 export interface UsageSession {

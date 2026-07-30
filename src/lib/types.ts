@@ -1,3 +1,5 @@
+export type { Model as ProviderModel, Provider } from "@opencode-ai/sdk/v2";
+
 export interface ModelSelection {
   providerID: string;
   modelID: string;
@@ -6,58 +8,11 @@ export interface ModelSelection {
 export type Modality = "text" | "audio" | "image" | "video" | "pdf";
 export type AttachmentModality = Exclude<Modality, "text">;
 
-export interface ModelCapabilityModalities {
-  text?: boolean;
-  audio?: boolean;
-  image?: boolean;
-  video?: boolean;
-  pdf?: boolean;
-}
-
-export interface ModelCapabilities {
-  temperature?: boolean;
-  reasoning?: boolean;
-  attachment?: boolean;
-  toolcall?: boolean;
-  input?: ModelCapabilityModalities;
-  output?: ModelCapabilityModalities;
-  interleaved?: boolean | { field: "reasoning_content" | "reasoning_details" };
-}
-
-export interface ProviderModel {
-  variants?: Record<string, Record<string, unknown>>;
-  id?: string;
-  name?: string;
-  family?: string;
-  status?: "alpha" | "beta" | "deprecated" | "active";
-  capabilities?: ModelCapabilities;
-  limit?: {
-    context?: number;
-    input?: number;
-    output?: number;
-  };
-  release_date?: string;
-}
-
-export interface Provider {
-  id: string;
-  name?: string;
-  models?: Record<string, ProviderModel>;
-  env?: string[];
-}
-
-export interface MirroredCredential {
-  providerId: string;
-  authType: string;
-  keyVersion: number;
-  updatedAt: string;
-}
-
 export interface NormalizedProvider {
   providerId: string;
   providerName: string;
   connected: boolean;
-  authMode: "oauth" | "api_key" | "manual_env" | null;
+  authMode: "oauth" | "api_key" | "manual_env";
   oauthMethods: Array<{ index: number; type: "oauth" | "api"; label: string }>;
   envVars: string[];
   keyLikeEnvVars: string[];
@@ -76,8 +31,7 @@ export interface EnvSchemaField {
   key: string;
   required: boolean;
   inputKind: "text" | "secret" | "file_path";
-  placeholder?: string;
-  description?: string;
+  description: string;
 }
 
 export interface EnvSchema {
