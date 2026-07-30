@@ -1,5 +1,7 @@
 <script lang="ts">
+  import { fade } from 'svelte/transition';
   import type { FileEntryDTO } from '$lib/contracts';
+  import ArtifactViewer from './ArtifactViewer.svelte';
   import * as Dialog from '$lib/components/ui/dialog';
   import * as DropdownMenu from '$lib/components/ui/dropdown-menu';
   import { downloadFileUrl } from '$lib/api';
@@ -19,15 +21,6 @@
   let { conversationId, files }: Props = $props();
   let previewOpen = $state(false);
   let previewFile = $state<FileEntryDTO | null>(null);
-  let previewContent = $state('');
-  let previewLoading = $state(false);
-  let previewError = $state<string | null>(null);
-  const previewCache = new Map<string, string>();
-
-  const previewableExtensions = new Set([
-    'md', 'txt', 'json', 'yaml', 'yml', 'xml', 'js', 'ts', 'jsx', 'tsx',
-    'css', 'html', 'py', 'go', 'rs', 'java', 'c', 'cpp', 'h', 'sh',
-  ]);
 
   function formatSize(bytes: number): string {
     if (bytes === 0) return '0 B';
@@ -51,41 +44,9 @@
     return new URL(relative, window.location.origin).toString();
   }
 
-  function isPreviewable(path: string): boolean {
-    const ext = path.split('.').pop()?.toLowerCase() ?? '';
-    return previewableExtensions.has(ext);
-  }
-
-  async function previewFileContent(file: FileEntryDTO) {
+  function previewFileContent(file: FileEntryDTO) {
     previewFile = file;
     previewOpen = true;
-    previewError = null;
-    previewContent = '';
-
-    if (!isPreviewable(file.path)) {
-      previewError = 'Preview is not available for this file type.';
-      return;
-    }
-
-    if (previewCache.has(file.path)) {
-      previewContent = previewCache.get(file.path) ?? '';
-      return;
-    }
-
-    previewLoading = true;
-    try {
-      const response = await fetch(downloadFileUrl(conversationId, file.path, 'output'), {
-        credentials: 'include',
-      });
-      if (!response.ok) throw new Error(`status ${response.status}`);
-      const text = await response.text();
-      previewCache.set(file.path, text);
-      previewContent = text;
-    } catch {
-      previewError = 'Failed to load preview.';
-    } finally {
-      previewLoading = false;
-    }
   }
 
   async function copyText(value: string) {
@@ -111,7 +72,10 @@
   <div class="h-full space-y-0.5 overflow-y-auto px-2 py-2">
     {#each files as file (file.path)}
       {@const FileIconComponent = getFileIcon(file.path)}
-      <div class="group flex items-center gap-2 rounded-md px-1 py-1 text-sm text-sidebar-foreground/80 transition-colors hover:bg-sidebar-accent hover:text-sidebar-accent-foreground">
+      <div
+        out:fade|global={{ duration: 140 }}
+        class="kepler-file-row group flex items-center gap-2 rounded-md px-1 py-1 text-sm text-sidebar-foreground/80 hover:bg-sidebar-accent hover:text-sidebar-accent-foreground"
+      >
         <button
           onclick={() => previewFileContent(file)}
           class="flex min-w-0 flex-1 items-center gap-2 rounded-md px-1 py-0.5 text-left"
@@ -170,9 +134,11 @@
 {/if}
 
 <Dialog.Root bind:open={previewOpen}>
-  <Dialog.Content class="max-w-3xl">
+  <Dialog.Content class="flex max-h-[85vh] w-[min(64rem,92vw)] max-w-none flex-col">
     <Dialog.Header>
-      <Dialog.Title>{previewFile ? getFileName(previewFile.path) : 'File Preview'}</Dialog.Title>
+      <Dialog.Title class="font-mono text-sm">
+        {previewFile ? getFileName(previewFile.path) : 'File Preview'}
+      </Dialog.Title>
       {#if previewFile}
         <Dialog.Description>
           {formatSize(previewFile.size)} • {formatDate(previewFile.mtime)}
@@ -180,14 +146,18 @@
       {/if}
     </Dialog.Header>
 
-    {#if previewLoading}
-      <div class="text-sm text-muted-foreground">Loading preview…</div>
-    {:else if previewError}
-      <div class="text-sm text-destructive">{previewError}</div>
-    {:else}
-      <div class="max-h-[60vh] overflow-auto rounded-md border bg-muted/30 p-3">
-        <pre class="whitespace-pre-wrap break-words text-xs leading-relaxed">{previewContent}</pre>
-      </div>
+    {#if previewFile}
+      {#key previewFile.path}
+        <ArtifactViewer {conversationId} file={previewFile} />
+      {/key}
     {/if}
   </Dialog.Content>
 </Dialog.Root>
+
+<style>
+  .kepler-file-row {
+    transition:
+      background-color var(--duration-quick) var(--ease-smooth-out),
+      color var(--duration-quick) var(--ease-smooth-out);
+  }
+</style>
