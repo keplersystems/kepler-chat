@@ -78,21 +78,22 @@ describe("files helper", () => {
     cleanupPaths.push(root);
 
     await mkdir(join(root, "a", "b"), { recursive: true });
+    await mkdir(join(root, "input"), { recursive: true });
+    await mkdir(join(root, ".opencode"), { recursive: true });
     await writeFile(join(root, "z.txt"), "z");
     await writeFile(join(root, "a", "b", "x.txt"), "x");
+    await writeFile(join(root, "input", "upload.txt"), "u");
+    await writeFile(join(root, ".opencode", "state.json"), "{}");
 
-    const entries = await listFilesRecursive(root, root);
+    const entries = await listFilesRecursive(root, root, new Set(["input"]));
     const paths = entries.map((entry) => entry.path);
 
-    expect(paths).toEqual(["a", "a/b", "a/b/x.txt", "z.txt"]);
+    expect(paths).toEqual(["a/b/x.txt", "z.txt"]);
 
     const file = entries.find((entry) => entry.path === "a/b/x.txt");
     expect(file?.isDir).toBe(false);
     expect(file?.size).toBe(1);
     expect(typeof file?.mtime).toBe("string");
-
-    const dir = entries.find((entry) => entry.path === "a/b");
-    expect(dir?.isDir).toBe(true);
   });
 
   it("does not list symlink entries", async () => {

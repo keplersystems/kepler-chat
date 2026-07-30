@@ -156,6 +156,7 @@ export function lookupMimeType(path: string): string | undefined {
 export async function listFilesRecursive(
   rootPath: string,
   startPath: string,
+  excludeTopLevel: Set<string> = new Set(),
 ): Promise<FileEntryDTO[]> {
   const entries: FileEntryDTO[] = [];
 
@@ -163,23 +164,26 @@ export async function listFilesRecursive(
     const dirEntries = await readdir(currentPath, { withFileTypes: true });
 
     for (const dirEntry of dirEntries) {
+      if (dirEntry.name.startsWith(".")) continue;
       const absolutePath = resolve(currentPath, dirEntry.name);
       const stats = await lstat(absolutePath);
       if (stats.isSymbolicLink()) {
         continue;
       }
       const relPath = relative(rootPath, absolutePath);
+      if (excludeTopLevel.has(relPath)) continue;
+
+      if (dirEntry.isDirectory()) {
+        await walk(absolutePath);
+        continue;
+      }
 
       entries.push({
         path: relPath,
         size: stats.size,
         mtime: stats.mtime.toISOString(),
-        isDir: dirEntry.isDirectory(),
+        isDir: false,
       });
-
-      if (dirEntry.isDirectory()) {
-        await walk(absolutePath);
-      }
     }
   }
 

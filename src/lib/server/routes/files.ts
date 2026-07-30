@@ -1,5 +1,5 @@
 import { Elysia, t } from "elysia";
-import { readFile, writeFile } from "node:fs/promises";
+import { readFile } from "node:fs/promises";
 import { requireConversation } from "$lib/server/conversations";
 import type {
   FileScope,
@@ -9,26 +9,27 @@ import type {
 import {
   listFilesRecursive,
   lookupMimeType,
-  resolveAvailableFilePath,
   resolveExistingSafeFilePath,
   resolveSafeFilePath,
   statOrNull,
 } from "$lib/server/files";
 import {
   getConversationInputPath,
-  getConversationOutputPath,
+  getConversationRoot,
   provisionConversationDirectories,
+  type ConversationLocator,
 } from "$lib/server/paths";
 import { requireAuth } from "$lib/server/auth";
+import { linkMediaIntoConversation, saveToLibrary } from "$lib/server/media";
 import { basename } from "node:path";
 
 function getConversationScopePath(
-  conversationId: string,
+  conversation: ConversationLocator,
   scope: FileScope,
 ): string {
   return scope === "input"
-    ? getConversationInputPath(conversationId)
-    : getConversationOutputPath(conversationId);
+    ? getConversationInputPath(conversation)
+    : getConversationRoot(conversation);
 }
 
 export const filesRoute = new Elysia({ prefix: "/api/conversations" })
@@ -39,27 +40,28 @@ export const filesRoute = new Elysia({ prefix: "/api/conversations" })
       const { id } = context.params;
       const { file } = context.body;
 
-      await requireConversation(id);
+      const conv = await requireConversation(id);
 
-      await provisionConversationDirectories(id);
+      await provisionConversationDirectories(conv);
       if (!(file instanceof File)) {
         context.set.status = 400;
         return { error: "Missing file upload" };
       }
 
-      const inputPath = getConversationInputPath(id);
-      const { absolutePath, relativePath } = await resolveAvailableFilePath(
-        inputPath,
+      // Every upload lands in the media library (deduplicated) and is
+      // hardlinked into the conversation, so reuse costs no space.
+      const row = await saveToLibrary(
+        Buffer.from(await file.arrayBuffer()),
         file.name,
+        file.type || undefined,
       );
-
-      await writeFile(absolutePath, Buffer.from(await file.arrayBuffer()));
+      const linked = await linkMediaIntoConversation(row.id, conv);
       return {
         success: true,
         file: {
-          path: relativePath,
-          size: file.size,
-          mimeType: file.type || undefined,
+          path: linked.path,
+          size: row.size,
+          mimeType: linked.mimeType,
         },
       };
     },
@@ -78,6 +80,24 @@ export const filesRoute = new Elysia({ prefix: "/api/conversations" })
       },
     },
   )
+  .post(
+    "/:id/files/from-library",
+    async (context) => {
+      requireAuth(context);
+      const conv = await requireConversation(context.params.id);
+      const linked = await linkMediaIntoConversation(context.body.mediaId, conv);
+      return { success: true, file: linked };
+    },
+    {
+      params: t.Object({ id: t.String() }),
+      body: t.Object({ mediaId: t.String({ minLength: 1 }) }),
+      detail: {
+        summary: "Attach library media",
+        tags: ["Files"],
+        description: "Hardlink a media library file into the conversation's input directory",
+      },
+    },
+  )
   .get(
     "/:id/files/output",
     async (context): Promise<ListOutputFilesResponse | { error: string }> => {
@@ -85,15 +105,17 @@ export const filesRoute = new Elysia({ prefix: "/api/conversations" })
       const { id } = context.params;
       const { prefix } = context.query;
 
-      await requireConversation(id);
+      const conv = await requireConversation(id);
 
-      await provisionConversationDirectories(id);
-      const outputPath = getConversationOutputPath(id);
+      await provisionConversationDirectories(conv);
+      // The whole working directory is the agent's visible output; input/
+      // holds the user's own uploads.
+      const workdirPath = getConversationRoot(conv);
 
-      let startPath = outputPath;
+      let startPath = workdirPath;
       if (prefix) {
         try {
-          startPath = resolveSafeFilePath(outputPath, prefix);
+          startPath = resolveSafeFilePath(workdirPath, prefix);
         } catch {
           context.set.status = 400;
           return { error: "Invalid prefix" };
@@ -110,7 +132,7 @@ export const filesRoute = new Elysia({ prefix: "/api/conversations" })
         return { error: "Prefix must point to a directory" };
       }
 
-      const files = await listFilesRecursive(outputPath, startPath);
+      const files = await listFilesRecursive(workdirPath, startPath, new Set(["input", "scratchpad"]));
       return { files };
     },
     {
@@ -136,7 +158,7 @@ export const filesRoute = new Elysia({ prefix: "/api/conversations" })
       const filePath = (context.params as { id: string; "*": string })["*"];
       const { scope } = context.query;
 
-      await requireConversation(id);
+      const conv = await requireConversation(id);
 
       if (!filePath || filePath.trim().length === 0) {
         context.set.status = 400;
@@ -144,7 +166,7 @@ export const filesRoute = new Elysia({ prefix: "/api/conversations" })
       }
 
       const fileScope: FileScope = scope ?? "output";
-      const basePath = getConversationScopePath(id, fileScope);
+      const basePath = getConversationScopePath(conv, fileScope);
 
       let absolutePath: string;
       try {
@@ -175,11 +197,12 @@ export const filesRoute = new Elysia({ prefix: "/api/conversations" })
 
       const target = await readFile(absolutePath);
       const downloadName = basename(filePath).replace(/"/g, "");
+      const disposition = context.query.disposition === "inline" ? "inline" : "attachment";
 
       return new Response(target, {
         headers: {
           "Content-Type": lookupMimeType(absolutePath) ?? "application/octet-stream",
-          "Content-Disposition": `attachment; filename=\"${downloadName}\"`,
+          "Content-Disposition": `${disposition}; filename=\"${downloadName}\"`,
         },
       });
     },
@@ -190,6 +213,7 @@ export const filesRoute = new Elysia({ prefix: "/api/conversations" })
       }),
       query: t.Object({
         scope: t.Optional(t.Union([t.Literal("input"), t.Literal("output")])),
+        disposition: t.Optional(t.Union([t.Literal("inline"), t.Literal("attachment")])),
       }),
       detail: {
         summary: "Download file",
