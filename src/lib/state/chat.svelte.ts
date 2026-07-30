@@ -1,45 +1,81 @@
 import type { PendingRequestDTO, SendMessageInput } from "$lib/contracts";
 import { invalidateAll } from "$app/navigation";
 import { parseSSEStream } from "$lib/sse";
+import { api, downloadFileUrl } from "$lib/api";
 import {
-  extractTokens,
-  getRequestId,
-  isTerminalFinish,
-  toToolCallView,
+  applyMessageInfo,
+  hasVisibleContent,
+  isRealSessionTitle,
+  toPartView,
   type MessageView,
-  type ToolCallView,
+  type PartView,
 } from "$lib/messages";
+import type { Part, Todo } from "@opencode-ai/sdk/v2";
+import { settings } from "$lib/state/settings.svelte";
 
-export type { MessageView, MessageTokens, ToolCallView } from "$lib/messages";
-export { toMessageViewList } from "$lib/messages";
+export type { MessageView, MessageTokens, PartView } from "$lib/messages";
+export { toMessageViewList, messageText } from "$lib/messages";
 
 interface StreamingMessage extends MessageView {
-  toolCallsById: Record<string, ToolCallView>;
+  /** part id -> index into parts, for O(1) streaming upserts */
+  partIndex: Map<string, number>;
 }
 
 function emptyMessage(id: string, role: MessageView["role"]): StreamingMessage {
-  return { id, role, text: "", reasoning: "", toolCallsById: {}, toolCalls: [] };
-}
-
-function shouldEmit(msg: StreamingMessage): boolean {
-  if (msg.text.trim().length > 0) return true;
-  if ((msg.reasoning ?? "").trim().length > 0) return true;
-  if (Object.keys(msg.toolCallsById).length > 0) return true;
-  return isTerminalFinish(msg.finish);
+  return { id, role, parts: [], partIndex: new Map() };
 }
 
 function toMessageView(msg: StreamingMessage): MessageView {
-  return { ...msg, toolCalls: Object.values(msg.toolCallsById) };
+  const { partIndex: _, ...view } = msg;
+  return { ...view, parts: [...msg.parts] };
+}
+
+function upsertPart(msg: StreamingMessage, part: Part): void {
+  const view = toPartView(part);
+  if (!view) return;
+  const idx = msg.partIndex.get(part.id);
+  if (idx === undefined) {
+    msg.partIndex.set(part.id, msg.parts.length);
+    msg.parts.push(view);
+  } else {
+    msg.parts[idx] = view;
+  }
+}
+
+function appendPart(msg: StreamingMessage, view: PartView): void {
+  msg.partIndex.set(view.id, msg.parts.length);
+  msg.parts.push(view);
+}
+
+function removePart(msg: StreamingMessage, partId: string): void {
+  const idx = msg.partIndex.get(partId);
+  if (idx === undefined) return;
+  msg.parts.splice(idx, 1);
+  msg.partIndex.delete(partId);
+  for (const [id, i] of msg.partIndex) {
+    if (i > idx) msg.partIndex.set(id, i - 1);
+  }
 }
 
 function createChatStore() {
   let pendingRequests = $state<PendingRequestDTO[]>([]);
-  let isStreaming = $state(false);
   let lastError = $state<string | null>(null);
   let streamingByConversation = $state<Record<string, MessageView[]>>({});
+  let activeStreams = $state<Record<string, true>>({});
+  let todosByConversation = $state<Record<string, Todo[]>>({});
+
+  const controllers = new Map<string, AbortController>();
 
   function streamingMessagesFor(conversationId: string): MessageView[] {
     return streamingByConversation[conversationId] ?? [];
+  }
+
+  function isStreamingFor(conversationId: string): boolean {
+    return conversationId in activeStreams;
+  }
+
+  function todosFor(conversationId: string): Todo[] {
+    return todosByConversation[conversationId] ?? [];
   }
 
   function clearStreaming(conversationId: string) {
@@ -53,11 +89,21 @@ function createChatStore() {
     streamingByConversation = { ...streamingByConversation, [conversationId]: messages };
   }
 
+  function setStreamActive(conversationId: string, active: boolean) {
+    const next = { ...activeStreams };
+    if (active) next[conversationId] = true;
+    else delete next[conversationId];
+    activeStreams = next;
+  }
+
   function reset() {
+    for (const controller of controllers.values()) controller.abort();
+    controllers.clear();
     pendingRequests = [];
-    isStreaming = false;
     lastError = null;
     streamingByConversation = {};
+    activeStreams = {};
+    todosByConversation = {};
   }
 
   function setError(message: string | null) {
@@ -69,9 +115,8 @@ function createChatStore() {
   }
 
   function upsertPendingRequest(request: PendingRequestDTO) {
-    const nextId = getRequestId(request.request);
     const idx = pendingRequests.findIndex(
-      (r) => r.type === request.type && getRequestId(r.request) === nextId,
+      (r) => r.type === request.type && r.request.id === request.request.id,
     );
     if (idx === -1) {
       pendingRequests = [...pendingRequests, request];
@@ -81,9 +126,15 @@ function createChatStore() {
   }
 
   function removePendingRequest(requestId: string) {
-    pendingRequests = pendingRequests.filter(
-      (r) => getRequestId(r.request) !== requestId,
-    );
+    pendingRequests = pendingRequests.filter((r) => r.request.id !== requestId);
+  }
+
+  /** Abort the running stream and ask OpenCode to stop generating. */
+  function stop(conversationId: string) {
+    const controller = controllers.get(conversationId);
+    if (!controller) return;
+    controller.abort();
+    void api.api.conversations({ id: conversationId }).abort.post();
   }
 
   async function send(
@@ -92,20 +143,27 @@ function createChatStore() {
     onTitle?: (title: string) => void,
   ): Promise<boolean> {
     setError(null);
-    isStreaming = true;
+    setStreamActive(conversationId, true);
+    const controller = new AbortController();
+    controllers.set(conversationId, controller);
     let succeeded = false;
 
     const messages = new Map<string, StreamingMessage>();
     let lastTitle: string | null = null;
 
-    const userEcho: StreamingMessage = {
-      ...emptyMessage(crypto.randomUUID(), "user"),
-      text:
-        input.text +
-        (input.attachments?.length
-          ? `\n\n[Attached ${input.attachments.length} file(s)]`
-          : ""),
-    };
+    const userEcho = emptyMessage(crypto.randomUUID(), "user");
+    if (input.text.trim().length > 0) {
+      appendPart(userEcho, { type: "text", id: "echo-text", text: input.text });
+    }
+    for (const [i, attachment] of (input.attachments ?? []).entries()) {
+      appendPart(userEcho, {
+        type: "file",
+        id: `echo-file-${i}`,
+        mime: attachment.mimeType ?? "application/octet-stream",
+        filename: attachment.filename ?? attachment.path,
+        url: downloadFileUrl(conversationId, attachment.path, "input"),
+      });
+    }
 
     const flush = () => {
       const visible: MessageView[] = [toMessageView(userEcho)];
@@ -113,7 +171,7 @@ function createChatStore() {
         // Server-side user messages are tracked for metadata (title) but not echoed —
         // the local userEcho already represents the user's submission until invalidateAll().
         if (msg.role === "user") continue;
-        if (shouldEmit(msg)) visible.push(toMessageView(msg));
+        if (hasVisibleContent(msg)) visible.push(toMessageView(msg));
       }
       writeStreaming(conversationId, visible);
     };
@@ -121,10 +179,7 @@ function createChatStore() {
 
     const ensureMessage = (id: string, role: MessageView["role"]): StreamingMessage => {
       const existing = messages.get(id);
-      if (existing) {
-        if (existing.role !== role) existing.role = role;
-        return existing;
-      }
+      if (existing) return existing;
       const created = emptyMessage(id, role);
       messages.set(id, created);
       return created;
@@ -136,6 +191,7 @@ function createChatStore() {
         credentials: "include",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify(input),
+        signal: controller.signal,
       });
 
       if (!response.ok || !response.body) {
@@ -146,117 +202,117 @@ function createChatStore() {
       }
 
       for await (const env of parseSSEStream(response.body)) {
-        if (env.event === "message.updated") {
-          const data = env.data as {
-            info?: {
-              id?: string;
-              role?: string;
-              finish?: string;
-              summary?: { title?: string };
-              modelID?: string;
-              providerID?: string;
-              tokens?: unknown;
-              time?: { created?: number };
-            };
-          };
-          const id = data.info?.id;
-          const role = data.info?.role;
-          if (!id || (role !== "user" && role !== "assistant" && role !== "system")) continue;
-
-          if (role === "user") {
-            const t = data.info?.summary?.title?.trim();
-            if (t && t !== lastTitle) {
-              lastTitle = t;
-              onTitle?.(t);
+        switch (env.event) {
+          case "message.updated": {
+            const info = env.data.info;
+            if (info.role === "user") {
+              const title = info.summary?.title?.trim();
+              if (title && title !== lastTitle) {
+                lastTitle = title;
+                onTitle?.(title);
+              }
             }
+            const msg = ensureMessage(info.id, info.role);
+            applyMessageInfo(msg, info);
+            break;
           }
-
-          const msg = ensureMessage(id, role);
-          msg.finish = data.info?.finish;
-          msg.modelID = data.info?.modelID;
-          msg.providerID = data.info?.providerID;
-          msg.tokens = extractTokens(data.info?.tokens);
-          msg.createdAt =
-            typeof data.info?.time?.created === "number" ? data.info.time.created : undefined;
-        } else if (env.event === "message.part.updated") {
-          const data = env.data as {
-            delta?: string;
-            part?: {
-              messageID?: string;
-              type?: string;
-              text?: string;
-              id?: string;
-              callID?: string;
-              tool?: string;
-              state?: { status?: ToolCallView["status"]; input?: unknown; output?: string; error?: string };
-            };
-          };
-          const part = data.part;
-          const id = part?.messageID;
-          if (!id || !part) continue;
-          const msg = messages.get(id);
-          if (!msg) continue;
-
-          if (part.type === "text") {
-            if (typeof data.delta === "string" && data.delta.length > 0) {
-              msg.text += data.delta;
-            } else if (typeof part.text === "string") {
-              msg.text = part.text;
-            }
-          } else if (part.type === "reasoning") {
-            if (typeof data.delta === "string" && data.delta.length > 0) {
-              msg.reasoning = (msg.reasoning ?? "") + data.delta;
-            } else if (typeof part.text === "string") {
-              msg.reasoning = part.text;
-            }
-          } else if (part.type === "tool") {
-            const tool = toToolCallView(part, `tool-${Date.now()}`);
-            msg.toolCallsById[tool.id] = { ...msg.toolCallsById[tool.id], ...tool };
-          } else {
-            continue;
+          case "message.removed": {
+            messages.delete(env.data.messageID);
+            break;
           }
-        } else if (env.event === "message.part.delta") {
-          const data = env.data as { id?: string; messageID?: string; delta?: string };
-          const id = data.messageID ?? data.id;
-          if (!id || !data.delta) continue;
-          const msg = messages.get(id);
-          if (!msg) continue;
-          msg.text += data.delta;
-        } else if (env.event === "permission.asked") {
-          upsertPendingRequest({ type: "permission", request: env.data });
-        } else if (env.event === "question.asked") {
-          upsertPendingRequest({ type: "question", request: env.data });
-        } else if (
-          env.event === "permission.replied" ||
-          env.event === "question.replied" ||
-          env.event === "question.rejected"
-        ) {
-          const id = getRequestId(env.data);
-          if (id) removePendingRequest(id);
-        } else if (env.event === "command.executed") {
-          const data = env.data as { name?: string; arguments?: string; messageID?: string };
-          if (!data.messageID || !data.name) continue;
-          const msg = messages.get(data.messageID);
-          if (!msg) continue;
-          const cmdId = `cmd:${data.name}:${data.arguments ?? ""}`;
-          msg.toolCallsById[cmdId] = {
-            id: cmdId,
-            name: data.name,
-            status: "executed",
-            input: data.arguments,
-          };
-        } else if (env.event === "error") {
-          const data = env.data as { message?: string };
-          throw new Error(data.message ?? "Stream error");
+          case "session.updated": {
+            const title = env.data.info.title?.trim();
+            if (isRealSessionTitle(title) && title !== lastTitle) {
+              lastTitle = title;
+              onTitle?.(title);
+            }
+            break;
+          }
+          case "message.part.updated": {
+            const part = env.data.part;
+            // Parts can arrive before their message.updated; role is corrected
+            // by the message event, and user-role messages are never emitted.
+            const msg = ensureMessage(part.messageID, "assistant");
+            upsertPart(msg, part);
+            break;
+          }
+          case "message.part.delta": {
+            const { messageID, partID, field, delta } = env.data;
+            if (field !== "text") break;
+            const msg = messages.get(messageID);
+            if (!msg) break;
+            const idx = msg.partIndex.get(partID);
+            if (idx === undefined) break;
+            const part = msg.parts[idx];
+            if (part.type !== "text" && part.type !== "reasoning") break;
+            msg.parts[idx] = { ...part, text: part.text + delta };
+            break;
+          }
+          case "message.part.removed": {
+            const msg = messages.get(env.data.messageID);
+            if (msg) removePart(msg, env.data.partID);
+            break;
+          }
+          case "permission.asked": {
+            upsertPendingRequest({ type: "permission", request: env.data });
+            break;
+          }
+          case "question.asked": {
+            upsertPendingRequest({ type: "question", request: env.data });
+            break;
+          }
+          case "permission.replied":
+          case "question.replied":
+          case "question.rejected": {
+            removePendingRequest(env.data.requestID);
+            break;
+          }
+          case "todo.updated": {
+            todosByConversation = {
+              ...todosByConversation,
+              [conversationId]: env.data.todos,
+            };
+            break;
+          }
+          case "command.executed": {
+            const msg = messages.get(env.data.messageID);
+            if (!msg) break;
+            appendPart(msg, {
+              type: "command",
+              id: `cmd:${env.data.name}:${env.data.arguments}`,
+              name: env.data.name,
+              args: env.data.arguments,
+            });
+            break;
+          }
+          case "error":
+            throw new Error(env.data.message);
         }
 
         flush();
       }
       succeeded = true;
     } catch (err) {
-      lastError = err instanceof Error ? err.message : String(err);
+      const aborted =
+        controller.signal.aborted ||
+        (err instanceof DOMException && err.name === "AbortError");
+      if (!aborted) {
+        lastError = err instanceof Error ? err.message : String(err);
+      }
     } finally {
-      isStreaming = false;
+      controllers.delete(conversationId);
+      setStreamActive(conversationId, false);
+      if (
+        settings.notifyCompletions &&
+        typeof Notification !== "undefined" &&
+        Notification.permission === "granted" &&
+        document.visibilityState === "hidden"
+      ) {
+        const notification = new Notification("Kepler", {
+          body: succeeded ? "Response finished" : "Run stopped with an error",
+        });
+        notification.onclick = () => window.focus();
+      }
       try {
         await invalidateAll();
       } finally {
@@ -272,17 +328,20 @@ function createChatStore() {
       return pendingRequests;
     },
     get isStreaming() {
-      return isStreaming;
+      return Object.keys(activeStreams).length > 0;
     },
     get lastError() {
       return lastError;
     },
+    isStreamingFor,
+    todosFor,
     streamingMessagesFor,
     setPendingRequests,
     upsertPendingRequest,
     removePendingRequest,
     setError,
     send,
+    stop,
     reset,
   };
 }

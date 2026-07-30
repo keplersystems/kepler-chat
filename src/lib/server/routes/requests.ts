@@ -28,7 +28,7 @@ export const requestsRoute = new Elysia({ prefix: "/api/conversations" })
 
       const conv = await requireConversation(id);
 
-      const { client } = await opencodeServer.conversationClient(id);
+      const { client } = await opencodeServer.conversationClient(conv);
       const [{ data: permissions, error: permError }, { data: questions, error: questionError }] =
         await Promise.all([client.permission.list(), client.question.list()]);
 

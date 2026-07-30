@@ -1,50 +1,15 @@
-import type {
-  SSEEnvelope,
-  SSEEventName,
-  SessionScopedEventPayloadMap,
+import {
+  SERVER_EVENT_NAMES,
+  type SSEEnvelope,
+  type ServerEventName,
 } from "$lib/contracts";
 
-const EVENT_NAMES = new Set<SSEEventName>([
-  "message.updated",
-  "message.removed",
-  "message.part.updated",
-  "message.part.delta",
-  "message.part.removed",
-  "permission.asked",
-  "permission.replied",
-  "question.asked",
-  "question.replied",
-  "question.rejected",
-  "session.created",
-  "session.updated",
-  "session.deleted",
-  "session.status",
-  "session.idle",
-  "session.compacted",
-  "session.diff",
-  "session.error",
-  "todo.updated",
-  "command.executed",
-  "tui.session.select",
-  "error",
-]);
+const EVENT_NAMES = new Set<string>(SERVER_EVENT_NAMES);
 
-function normalizeEventName(value: string): SSEEventName {
-  if (EVENT_NAMES.has(value as SSEEventName)) {
-    return value as SSEEventName;
-  }
-  return "error";
-}
-
-function parseEnvelope(
-  id: string,
-  event: string,
-  dataLines: string[],
-): SSEEnvelope<SessionScopedEventPayloadMap[keyof SessionScopedEventPayloadMap]> {
+function parseEnvelope(id: string, event: string, dataLines: string[]): SSEEnvelope {
   const dataRaw = dataLines.join("\n");
-  const eventName = normalizeEventName(event || "error");
 
-  if (eventName === "error") {
+  if (event === "error" || !EVENT_NAMES.has(event)) {
     try {
       const parsed = JSON.parse(dataRaw) as { message?: unknown };
       const message =
@@ -62,23 +27,25 @@ function parseEnvelope(
   }
 
   try {
+    // Trust boundary: the server forwards OpenCode event properties verbatim,
+    // so the parsed JSON is the payload type for this event name.
     return {
       id,
-      event: eventName,
-      data: JSON.parse(dataRaw) as SessionScopedEventPayloadMap[keyof SessionScopedEventPayloadMap],
-    };
+      event,
+      data: JSON.parse(dataRaw),
+    } as Extract<SSEEnvelope, { event: ServerEventName }>;
   } catch {
     return {
       id,
       event: "error",
-      data: { message: `Invalid SSE JSON for event ${eventName}` },
+      data: { message: `Invalid SSE JSON for event ${event}` },
     };
   }
 }
 
 export async function* parseSSEStream(
   stream: ReadableStream<Uint8Array>,
-): AsyncGenerator<SSEEnvelope<SessionScopedEventPayloadMap[keyof SessionScopedEventPayloadMap]>> {
+): AsyncGenerator<SSEEnvelope> {
   const reader = stream.getReader();
   const decoder = new TextDecoder();
   let buffer = "";

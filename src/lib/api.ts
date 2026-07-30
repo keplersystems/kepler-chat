@@ -9,6 +9,16 @@ export function serverApi(fetcher: typeof fetch, origin = "http://localhost") {
   return treaty<App>(origin, { fetcher });
 }
 
+/** Extract the message from an Elysia error payload (`{ error: string }` or plain string). */
+export function apiErrorMessage(value: unknown, fallback: string): string {
+  if (typeof value === "string" && value) return value;
+  if (typeof value === "object" && value !== null && "error" in value) {
+    const { error } = value as { error: unknown };
+    if (typeof error === "string") return error;
+  }
+  return fallback;
+}
+
 export function downloadFileUrl(
   conversationId: string,
   path: string,

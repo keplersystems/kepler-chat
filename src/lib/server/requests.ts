@@ -16,7 +16,7 @@ async function withRequestMatch<T extends SessionScopedRequest>(
   action: (client: OpencodeClient) => Promise<void>,
 ): Promise<void> {
   const conv = await requireConversation(conversationId);
-  const { client } = await opencodeServer.conversationClient(conversationId);
+  const { client } = await opencodeServer.conversationClient(conv);
   const { data, error } = await fetchList(client);
   if (error || !data) throw new Error("Failed to fetch request list");
   const match = data.find(

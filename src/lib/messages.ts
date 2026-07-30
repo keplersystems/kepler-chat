@@ -1,100 +1,158 @@
-export interface ToolCallView {
-  id: string;
-  name: string;
-  status: "pending" | "running" | "completed" | "error" | "executed";
-  input?: string;
-  output?: string;
-  error?: string;
-}
+// View model for chat messages. Parts stay ordered exactly as OpenCode
+// produced them, so text/tool/reasoning interleaving renders faithfully.
+
+import type {
+  AssistantMessage,
+  Message,
+  Part,
+  ToolState,
+} from "@opencode-ai/sdk/v2";
+
+export type PartView =
+  | { type: "text"; id: string; text: string }
+  | { type: "reasoning"; id: string; text: string }
+  | { type: "tool"; id: string; callID: string; name: string; state: ToolState }
+  | { type: "file"; id: string; mime: string; filename?: string; url: string }
+  | { type: "subtask"; id: string; agent: string; description: string }
+  | { type: "command"; id: string; name: string; args: string }
+  | { type: "retry"; id: string; attempt: number; message: string };
 
 export interface MessageTokens {
-  input?: number;
-  output?: number;
-  reasoning?: number;
-  cacheRead?: number;
-  cacheWrite?: number;
-  total?: number;
+  input: number;
+  output: number;
+  reasoning: number;
+  cacheRead: number;
+  cacheWrite: number;
+  total: number;
 }
 
 export interface MessageView {
   id: string;
-  role: "user" | "assistant" | "system";
-  text: string;
-  reasoning?: string;
-  toolCalls?: ToolCallView[];
+  role: "user" | "assistant";
+  parts: PartView[];
   finish?: string;
+  error?: string;
   modelID?: string;
   providerID?: string;
   tokens?: MessageTokens;
+  cost?: number;
   createdAt?: number;
 }
 
-interface RawTokens {
-  total?: number;
-  input?: number;
-  output?: number;
-  reasoning?: number;
-  cache?: { read?: number; write?: number };
-}
-
-interface RawToolPart {
-  id?: string;
-  callID?: string;
-  tool?: string;
-  state?: {
-    status?: ToolCallView["status"];
-    input?: unknown;
-    output?: string;
-    error?: string;
-  };
-}
-
-export function extractTokens(raw: unknown): MessageTokens | undefined {
-  if (!raw || typeof raw !== "object") return undefined;
-  const t = raw as RawTokens;
-  const input = typeof t.input === "number" ? t.input : undefined;
-  const output = typeof t.output === "number" ? t.output : undefined;
-  const reasoning = typeof t.reasoning === "number" ? t.reasoning : undefined;
-  const cacheRead = typeof t.cache?.read === "number" ? t.cache.read : undefined;
-  const cacheWrite = typeof t.cache?.write === "number" ? t.cache.write : undefined;
-  const total =
-    typeof t.total === "number"
-      ? t.total
-      : input !== undefined || output !== undefined
-        ? (input ?? 0) + (output ?? 0)
-        : undefined;
-  if (
-    input === undefined &&
-    output === undefined &&
-    reasoning === undefined &&
-    cacheRead === undefined &&
-    cacheWrite === undefined &&
-    total === undefined
-  ) {
-    return undefined;
-  }
-  return { input, output, reasoning, cacheRead, cacheWrite, total };
-}
-
-export function toToolCallView(part: RawToolPart, fallbackId: string): ToolCallView {
+export function extractTokens(
+  tokens: AssistantMessage["tokens"],
+): MessageTokens {
   return {
-    id: part.callID ?? part.id ?? fallbackId,
-    name: part.tool ?? "tool",
-    status: part.state?.status ?? "running",
-    input: part.state?.input !== undefined ? JSON.stringify(part.state.input) : undefined,
-    output: part.state?.output,
-    error: part.state?.error,
+    input: tokens.input,
+    output: tokens.output,
+    reasoning: tokens.reasoning,
+    cacheRead: tokens.cache.read,
+    cacheWrite: tokens.cache.write,
+    total: tokens.total ?? tokens.input + tokens.output,
   };
 }
 
-/** Pull a request id out of a permission/question payload. */
-export function getRequestId(value: unknown): string | null {
-  if (!value || typeof value !== "object") return null;
-  const obj = value as { id?: unknown; requestID?: unknown; requestId?: unknown };
-  if (typeof obj.id === "string" && obj.id.length > 0) return obj.id;
-  if (typeof obj.requestID === "string" && obj.requestID.length > 0) return obj.requestID;
-  if (typeof obj.requestId === "string" && obj.requestId.length > 0) return obj.requestId;
-  return null;
+/** Map an OpenCode part to its renderable view, or null for non-visual parts. */
+export function toPartView(part: Part): PartView | null {
+  switch (part.type) {
+    case "text":
+      if (part.synthetic || part.ignored) return null;
+      return { type: "text", id: part.id, text: part.text };
+    case "reasoning":
+      return { type: "reasoning", id: part.id, text: part.text };
+    case "tool":
+      return {
+        type: "tool",
+        id: part.id,
+        callID: part.callID,
+        name: part.tool,
+        state: part.state,
+      };
+    case "file":
+      return {
+        type: "file",
+        id: part.id,
+        mime: part.mime,
+        filename: part.filename,
+        url: part.url,
+      };
+    case "subtask":
+      return {
+        type: "subtask",
+        id: part.id,
+        agent: part.agent,
+        description: part.description,
+      };
+    case "retry":
+      return {
+        type: "retry",
+        id: part.id,
+        attempt: part.attempt,
+        message: part.error.data.message,
+      };
+    default:
+      return null;
+  }
+}
+
+function extractErrorMessage(error: AssistantMessage["error"]): string | undefined {
+  if (!error) return undefined;
+  const message = (error.data as { message?: unknown }).message;
+  return typeof message === "string" ? message : error.name;
+}
+
+/** Apply message-level metadata from an OpenCode message onto a view. */
+export function applyMessageInfo(view: MessageView, info: Message): void {
+  view.role = info.role;
+  view.createdAt = info.time.created;
+  if (info.role === "assistant") {
+    view.finish = info.finish;
+    view.modelID = info.modelID;
+    view.providerID = info.providerID;
+    view.tokens = extractTokens(info.tokens);
+    view.cost = info.cost;
+    view.error = extractErrorMessage(info.error);
+  } else {
+    view.modelID = info.model.modelID;
+    view.providerID = info.model.providerID;
+  }
+}
+
+/** Concatenated text content, used for copy-to-clipboard. */
+/**
+ * Rebuild a send-API attachment from a persisted user file part. Uploads live
+ * under the conversation's input/ dir (see paths.ts) and the API takes paths
+ * relative to it; parts whose URL is elsewhere (e.g. generated output files)
+ * return null.
+ */
+export function fileAttachmentInput(
+  part: Extract<PartView, { type: "file" }>,
+): { path: string; mimeType?: string; filename?: string } | null {
+  if (!part.url.startsWith("file://")) return null;
+  const pathname = decodeURIComponent(new URL(part.url).pathname);
+  const marker = "/input/";
+  const index = pathname.lastIndexOf(marker);
+  if (index === -1) return null;
+  return {
+    path: pathname.slice(index + marker.length),
+    mimeType: part.mime,
+    filename: part.filename,
+  };
+}
+
+export function messageText(view: MessageView): string {
+  return view.parts
+    .filter((p) => p.type === "text")
+    .map((p) => p.text)
+    .join("\n\n");
+}
+
+/** OpenCode's placeholder session titles ("New session - <iso>") are never displayed. */
+const DEFAULT_SESSION_TITLE =
+  /^(New session - |Child session - )\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{3}Z$/;
+
+export function isRealSessionTitle(title: string | undefined): title is string {
+  return !!title && !DEFAULT_SESSION_TITLE.test(title);
 }
 
 const NORMAL_FINISH = new Set(["stop", "tool-calls", "tool_calls", "unknown"]);
@@ -117,61 +175,25 @@ export function isTerminalFinish(finish?: string): boolean {
   );
 }
 
-export function toMessageViewList(rawMessages: unknown[]): MessageView[] {
-  return rawMessages
-    .map((raw): MessageView | null => {
-      if (!raw || typeof raw !== "object") return null;
-      const m = raw as {
-        info?: {
-          id?: string;
-          role?: string;
-          modelID?: string;
-          providerID?: string;
-          tokens?: unknown;
-          finish?: string;
-          time?: { created?: number };
-        };
-        parts?: Array<{ type?: string; text?: string }>;
+export function hasVisibleContent(view: MessageView): boolean {
+  const hasRenderableParts = view.parts.some(
+    (p) => p.type !== "text" || p.text.trim().length > 0,
+  );
+  return hasRenderableParts || view.error !== undefined || isTerminalFinish(view.finish);
+}
+
+export function toMessageViewList(
+  entries: Array<{ info: Message; parts: Part[] }>,
+): MessageView[] {
+  return entries
+    .map(({ info, parts }) => {
+      const view: MessageView = {
+        id: info.id,
+        role: info.role,
+        parts: parts.map(toPartView).filter((p): p is PartView => p !== null),
       };
-      const id = m.info?.id;
-      const role = m.info?.role;
-      if (!id || (role !== "user" && role !== "assistant" && role !== "system")) return null;
-
-      const parts = m.parts ?? [];
-      const text = parts
-        .filter((p) => p?.type === "text" && typeof p.text === "string")
-        .map((p) => p.text as string)
-        .join("");
-      const reasoning = parts
-        .filter((p) => p?.type === "reasoning" && typeof p.text === "string")
-        .map((p) => p.text as string)
-        .join("");
-      const toolCalls = parts
-        .filter((p) => p?.type === "tool")
-        .map((p, i) => toToolCallView(p as RawToolPart, `tool-${id}-${i}`));
-
-      if (
-        (role === "assistant" || role === "system") &&
-        text.trim().length === 0 &&
-        reasoning.trim().length === 0 &&
-        toolCalls.length === 0
-      ) {
-        return null;
-      }
-
-      return {
-        id,
-        role,
-        text,
-        reasoning,
-        toolCalls,
-        finish: m.info?.finish,
-        modelID: m.info?.modelID,
-        providerID: m.info?.providerID,
-        tokens: extractTokens(m.info?.tokens),
-        createdAt:
-          typeof m.info?.time?.created === "number" ? m.info.time.created : undefined,
-      };
+      applyMessageInfo(view, info);
+      return view;
     })
-    .filter((m): m is MessageView => m !== null);
+    .filter((view) => view.role === "user" || hasVisibleContent(view));
 }

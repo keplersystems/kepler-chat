@@ -4,8 +4,12 @@ import { conversation, conversationMessageModel } from "$lib/server/db/schema/op
 import { eq } from "drizzle-orm";
 import { opencodeServer } from "$lib/server/opencode/supervisor";
 import { requireAuth } from "$lib/server/auth";
-import { requireConversation } from "$lib/server/conversations";
+import {
+  deleteConversationMessage,
+  requireConversation,
+} from "$lib/server/conversations";
 import type { Event, FilePartInput, TextPartInput } from "@opencode-ai/sdk/v2";
+import type { EventPayload, ServerEventName } from "$lib/contracts";
 import { basename } from "node:path";
 import { pathToFileURL } from "node:url";
 import {
@@ -20,52 +24,43 @@ import {
   hasProviderModel,
   type ProviderModelCatalog,
 } from "$lib/server/provider-models";
+import { isRealSessionTitle } from "$lib/messages";
+
+/**
+ * Session id extractor per forwarded event, exhaustive over the shared
+ * SERVER_EVENT_NAMES contract so the client and server can never drift.
+ */
+const sessionIdOf: {
+  [K in ServerEventName]: (properties: EventPayload<K>) => string | undefined;
+} = {
+  "message.updated": (p) => p.sessionID,
+  "message.removed": (p) => p.sessionID,
+  "message.part.updated": (p) => p.part.sessionID,
+  "message.part.delta": (p) => p.sessionID,
+  "message.part.removed": (p) => p.sessionID,
+  "permission.asked": (p) => p.sessionID,
+  "permission.replied": (p) => p.sessionID,
+  "question.asked": (p) => p.sessionID,
+  "question.replied": (p) => p.sessionID,
+  "question.rejected": (p) => p.sessionID,
+  "session.created": (p) => p.info.id,
+  "session.updated": (p) => p.info.id,
+  "session.deleted": (p) => p.info.id,
+  "session.status": (p) => p.sessionID,
+  "session.idle": (p) => p.sessionID,
+  "session.compacted": (p) => p.sessionID,
+  "session.diff": (p) => p.sessionID,
+  "session.error": (p) => p.sessionID,
+  "todo.updated": (p) => p.sessionID,
+  "command.executed": (p) => p.sessionID,
+  "tui.session.select": (p) => p.sessionID,
+};
 
 function getSessionIdFromEvent(event: Event): string | undefined {
-  switch (event.type) {
-    case "message.updated":
-      return event.properties.info.sessionID;
-    case "message.removed":
-      return event.properties.sessionID;
-    case "message.part.updated":
-      return event.properties.part.sessionID;
-    case "message.part.delta":
-      return event.properties.sessionID;
-    case "message.part.removed":
-      return event.properties.sessionID;
-    case "permission.asked":
-      return event.properties.sessionID;
-    case "permission.replied":
-      return event.properties.sessionID;
-    case "question.asked":
-      return event.properties.sessionID;
-    case "question.replied":
-      return event.properties.sessionID;
-    case "question.rejected":
-      return event.properties.sessionID;
-    case "session.status":
-      return event.properties.sessionID;
-    case "session.idle":
-      return event.properties.sessionID;
-    case "session.compacted":
-      return event.properties.sessionID;
-    case "todo.updated":
-      return event.properties.sessionID;
-    case "session.created":
-    case "session.updated":
-    case "session.deleted":
-      return event.properties.info.id;
-    case "session.diff":
-      return event.properties.sessionID;
-    case "command.executed":
-      return event.properties.sessionID;
-    case "session.error":
-      return event.properties.sessionID;
-    case "tui.session.select":
-      return event.properties.sessionID;
-    default:
-      return undefined;
-  }
+  const extract = (
+    sessionIdOf as Partial<Record<Event["type"], (properties: unknown) => string | undefined>>
+  )[event.type];
+  return extract?.(event.properties);
 }
 
 function isMessageComplete(event: Event): boolean {
@@ -80,23 +75,14 @@ function isMessageComplete(event: Event): boolean {
 }
 
 function getConversationTitleFromEvent(event: Event): string | null {
+  if (event.type === "session.updated") {
+    const title = event.properties.info.title?.trim();
+    return isRealSessionTitle(title) ? title : null;
+  }
   if (event.type !== "message.updated") return null;
-
-  const info = event.properties.info as {
-    role?: string;
-    summary?: { title?: string };
-  };
-
-  if (info.role !== "user") {
-    return null;
-  }
-
-  const title = info.summary?.title?.trim();
-  if (!title) {
-    return null;
-  }
-
-  return title;
+  const info = event.properties.info;
+  if (info.role !== "user") return null;
+  return info.summary?.title?.trim() || null;
 }
 
 function formatSSE(id: string, event: string, data: string): string {
@@ -112,7 +98,7 @@ export const messagesRoute = new Elysia({ prefix: "/api/conversations" })
 
       const conv = await requireConversation(id);
 
-      const { client } = await opencodeServer.conversationClient(id);
+      const { client } = await opencodeServer.conversationClient(conv);
       const { data: messages, error } = await client.session.messages({
         sessionID: conv.opencode_session_id,
       });
@@ -139,11 +125,11 @@ export const messagesRoute = new Elysia({ prefix: "/api/conversations" })
     async (context) => {
       requireAuth(context);
       const { id } = context.params;
-      const { text, model, attachments = [] } = context.body;
+      const { text, model, variant, attachments = [] } = context.body;
 
       const conv = await requireConversation(id);
 
-      const { client } = await opencodeServer.conversationClient(id);
+      const { client } = await opencodeServer.conversationClient(conv);
       const { data: providerCatalog, error: providerCatalogError } =
         await client.provider.list();
       if (providerCatalogError || !providerCatalog) {
@@ -172,7 +158,7 @@ export const messagesRoute = new Elysia({ prefix: "/api/conversations" })
         return { error: "Message text or attachment is required" };
       }
 
-      const inputBasePath = getConversationInputPath(id);
+      const inputBasePath = getConversationInputPath(conv);
       const fileParts: FilePartInput[] = [];
       for (const attachment of attachments) {
         let absolutePath: string;
@@ -254,6 +240,7 @@ export const messagesRoute = new Elysia({ prefix: "/api/conversations" })
                 sessionID: conv.opencode_session_id,
                 parts,
                 model,
+                variant,
               });
               if (result.error || !result.data) {
                 throw new Error("Failed to send prompt");
@@ -327,6 +314,26 @@ export const messagesRoute = new Elysia({ prefix: "/api/conversations" })
             }
 
             await promptGuard;
+
+            // Title generation is async in OpenCode and may land after the
+            // final message event; sync it once before closing the stream.
+            const { data: session } = await client.session.get({
+              sessionID: conv.opencode_session_id,
+            });
+            const finalTitle = session?.title?.trim();
+            if (isRealSessionTitle(finalTitle) && finalTitle !== conversationTitle) {
+              await db
+                .update(conversation)
+                .set({ title: finalTitle })
+                .where(eq(conversation.id, id));
+              conversationTitle = finalTitle;
+              const sseMessage = formatSSE(
+                Date.now().toString(),
+                "session.updated",
+                JSON.stringify({ info: session }),
+              );
+              controller.enqueue(encoder.encode(sseMessage));
+            }
           } catch (error) {
             if (!context.request.signal.aborted) {
               const errorMessage = formatSSE(
@@ -365,6 +372,7 @@ export const messagesRoute = new Elysia({ prefix: "/api/conversations" })
           providerID: t.String({ minLength: 1 }),
           modelID: t.String({ minLength: 1 }),
         }),
+        variant: t.Optional(t.String({ minLength: 1 })),
         attachments: t.Optional(
           t.Array(
             t.Object({
@@ -393,6 +401,41 @@ export const messagesRoute = new Elysia({ prefix: "/api/conversations" })
             },
           },
         },
+      },
+    },
+  )
+  .delete(
+    "/:id/messages/:messageID",
+    async (context) => {
+      requireAuth(context);
+      await deleteConversationMessage(context.params.id, context.params.messageID);
+      return { success: true as const };
+    },
+    {
+      params: t.Object({ id: t.String(), messageID: t.String() }),
+      detail: {
+        summary: "Delete message",
+        tags: ["Messages"],
+        description: "Delete a message from the conversation's OpenCode session",
+      },
+    },
+  )
+  .post(
+    "/:id/abort",
+    async (context) => {
+      requireAuth(context);
+      const conv = await requireConversation(context.params.id);
+      const { client } = await opencodeServer.conversationClient(conv);
+      const { error } = await client.session.abort({ sessionID: conv.opencode_session_id });
+      if (error) throw new Error("Failed to abort session");
+      return { success: true as const };
+    },
+    {
+      params: t.Object({ id: t.String() }),
+      detail: {
+        summary: "Abort generation",
+        tags: ["Messages"],
+        description: "Stop the in-flight assistant response for a conversation",
       },
     },
   );

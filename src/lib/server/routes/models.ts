@@ -46,9 +46,9 @@ export const modelsRoute = new Elysia({ prefix: "/api/conversations" })
       requireAuth(context);
       const { id } = context.params;
       const { providerID, modelID } = context.body;
-      await requireConversation(id);
+      const conv = await requireConversation(id);
 
-      const { client } = await opencodeServer.conversationClient(id);
+      const { client } = await opencodeServer.conversationClient(conv);
       const { data: providers, error } = await client.provider.list();
       if (error || !providers) {
         throw new Error("Failed to fetch provider catalog");
