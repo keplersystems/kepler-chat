@@ -19,7 +19,7 @@
 <DropdownMenuPrimitive.Item
   {...rest}
   class={cn(
-    "relative flex cursor-default select-none items-center gap-2 rounded-md px-2 py-1.5 text-sm outline-none transition-colors data-[disabled]:pointer-events-none data-[disabled]:opacity-50 data-[highlighted]:bg-accent data-[highlighted]:text-accent-foreground",
+    "relative flex cursor-default select-none items-center gap-2 rounded-lg px-2.5 py-1.5 text-sm outline-none data-[disabled]:pointer-events-none data-[disabled]:opacity-50 data-[highlighted]:bg-accent data-[highlighted]:text-accent-foreground",
     inset && "pl-8",
     variant === "destructive" && "text-destructive data-[highlighted]:bg-destructive data-[highlighted]:text-destructive-foreground",
     className,

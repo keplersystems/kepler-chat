@@ -1,9 +1,17 @@
 <!doctype html>
-<html lang="en" class="dark">
+<html lang="en">
   <head>
     <meta charset="utf-8" />
     <link rel="icon" href="%sveltekit.assets%/favicon.png" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <script>
+      // Apply the theme before first paint to avoid a flash of the wrong scheme.
+      const stored = localStorage.getItem("kepler:theme");
+      const dark =
+        stored === "dark" ||
+        (stored !== "light" && matchMedia("(prefers-color-scheme: dark)").matches);
+      document.documentElement.classList.toggle("dark", dark);
+    </script>
     %sveltekit.head%
   </head>
   <body data-sveltekit-preload-data="hover">

@@ -14,10 +14,13 @@
 <SelectPrimitive.Trigger
   {...rest}
   class={cn(
-    "flex h-9 w-full items-center justify-between gap-2 rounded-md border border-input bg-card px-3 py-2 text-sm shadow-xs transition-colors hover:bg-accent focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-1 disabled:cursor-not-allowed disabled:opacity-50 data-[placeholder]:text-muted-foreground [&>span]:truncate",
+    "group flex h-9 w-full items-center justify-between gap-2 rounded-lg border bg-input px-3 py-2 text-sm hover:bg-accent focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring/50 disabled:cursor-not-allowed disabled:opacity-50 data-[placeholder]:text-muted-foreground [&>span]:truncate",
     className,
   )}
 >
   {@render children?.()}
-  <ChevronDownIcon class="h-4 w-4 shrink-0 opacity-60" aria-hidden="true" />
+  <ChevronDownIcon
+    class="h-4 w-4 shrink-0 opacity-60 transition-transform duration-(--acc-chevron) ease-(--acc-ease) group-data-[state=open]:rotate-180"
+    aria-hidden="true"
+  />
 </SelectPrimitive.Trigger>

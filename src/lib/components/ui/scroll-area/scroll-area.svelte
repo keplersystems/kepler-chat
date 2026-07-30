@@ -31,17 +31,17 @@
   {#if orientation === "vertical" || orientation === "both"}
     <ScrollAreaPrimitive.Scrollbar
       orientation="vertical"
-      class="flex h-full w-2 touch-none select-none border-l border-l-transparent p-px transition-opacity duration-150 ease-out data-[state=hidden]:opacity-0"
+      class="flex h-full w-2 touch-none select-none border-l border-l-transparent p-px transition-opacity duration-300 ease-out data-[state=hidden]:opacity-0"
     >
-      <ScrollAreaPrimitive.Thumb class="relative flex-1 rounded-full bg-border transition-colors hover:bg-muted-foreground/60" />
+      <ScrollAreaPrimitive.Thumb class="relative flex-1 rounded-full bg-border/80 transition-colors duration-200 hover:bg-muted-foreground/60" />
     </ScrollAreaPrimitive.Scrollbar>
   {/if}
   {#if orientation === "horizontal" || orientation === "both"}
     <ScrollAreaPrimitive.Scrollbar
       orientation="horizontal"
-      class="flex h-2 touch-none select-none flex-col border-t border-t-transparent p-px transition-opacity duration-150 ease-out data-[state=hidden]:opacity-0"
+      class="flex h-2 touch-none select-none flex-col border-t border-t-transparent p-px transition-opacity duration-300 ease-out data-[state=hidden]:opacity-0"
     >
-      <ScrollAreaPrimitive.Thumb class="relative flex-1 rounded-full bg-border transition-colors hover:bg-muted-foreground/60" />
+      <ScrollAreaPrimitive.Thumb class="relative flex-1 rounded-full bg-border/80 transition-colors duration-200 hover:bg-muted-foreground/60" />
     </ScrollAreaPrimitive.Scrollbar>
   {/if}
   {#if orientation === "both"}

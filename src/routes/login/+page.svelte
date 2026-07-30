@@ -1,35 +1,48 @@
 <script lang="ts">
   import { enhance } from "$app/forms";
   import { Button } from "$lib/components/ui/button";
+  import { Input } from "$lib/components/ui/input";
+  import { ThinkingOrb } from "$lib/components/ui/orb";
 
   let { form } = $props();
+
+  let inputEl: HTMLElement | null = $state(null);
+  let shaking = $state(false);
+
+  $effect(() => {
+    if (!form?.error || !inputEl) return;
+    shaking = false;
+    void inputEl.offsetWidth;
+    shaking = true;
+  });
 </script>
 
 <div class="flex min-h-screen items-center justify-center bg-background px-4">
-  <div class="w-full max-w-sm space-y-6">
-    <div class="space-y-2 text-center">
-      <h1 class="text-2xl font-semibold tracking-tight">Kepler</h1>
-      <p class="text-sm text-muted-foreground">Enter the passcode to continue</p>
+  <div class="w-full max-w-sm space-y-8">
+    <div class="flex flex-col items-center gap-4 text-center">
+      <ThinkingOrb size={64} state="searching" speed={0.7} />
+      <div class="space-y-1.5">
+        <h1 class="font-mono text-sm font-semibold uppercase tracking-[0.3em] text-foreground">Kepler</h1>
+        <p class="text-sm text-muted-foreground">Enter your passcode to continue.</p>
+      </div>
     </div>
 
     <form method="POST" use:enhance class="space-y-4">
-      {#if form?.error}
-        <div class="rounded-md bg-destructive/10 p-3 text-sm text-destructive">
-          {form.error}
-        </div>
-      {/if}
-
-      <div class="space-y-2">
+      <div class="space-y-2" bind:this={inputEl}>
         <label for="passcode" class="text-sm font-medium">Passcode</label>
-        <input
+        <Input
           id="passcode"
           name="passcode"
           type="password"
-          minlength="4"
+          minlength={4}
           autocomplete="current-password"
           required
-          class="flex h-10 w-full rounded-md border border-input bg-transparent px-3 py-2 text-sm shadow-sm placeholder:text-muted-foreground focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring"
+          aria-invalid={form?.error ? true : undefined}
+          class={shaking ? "is-shaking is-error border-destructive/60" : ""}
         />
+        {#if form?.error}
+          <p class="text-sm text-destructive" role="alert">{form.error}</p>
+        {/if}
       </div>
 
       <Button type="submit" class="w-full">Sign in</Button>
