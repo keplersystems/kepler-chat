@@ -91,7 +91,7 @@
       <div>
         <p class="text-sm text-foreground">Auto-compact</p>
         <p class="mt-0.5 text-sm text-muted-foreground">
-          Let OpenCode summarize older messages when the context window fills.
+          Summarize older messages automatically when the context window fills.
         </p>
       </div>
       <span class={savingCompaction || autoCompact === null ? "pointer-events-none opacity-60" : ""}>

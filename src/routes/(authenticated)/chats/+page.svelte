@@ -205,8 +205,8 @@
     <Dialog.Header>
       <Dialog.Title>Delete {selected.length} {selected.length === 1 ? "chat" : "chats"}</Dialog.Title>
       <Dialog.Description>
-        This permanently deletes the selected conversations, their OpenCode sessions, and all
-        generated files. This cannot be undone.
+        This permanently deletes the selected conversations and all their generated files. This
+        cannot be undone.
       </Dialog.Description>
     </Dialog.Header>
     {#if deleteError}

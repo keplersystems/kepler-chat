@@ -54,8 +54,7 @@
 
 <div class="max-w-2xl space-y-6">
   <p class="text-sm text-muted-foreground">
-    What the agent may do without asking. Changes restart the OpenCode server, so a moment of
-    downtime applies.
+    What the agent may do without asking. Changes take a few seconds to apply.
   </p>
 
   {#if error}
