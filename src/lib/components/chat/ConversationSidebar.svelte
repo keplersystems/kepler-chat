@@ -10,10 +10,8 @@
   import { Input } from "$lib/components/ui/input";
   import * as DropdownMenu from "$lib/components/ui/dropdown-menu";
   import * as Tooltip from "$lib/components/ui/tooltip";
-  import ThemeToggle from "$lib/components/ui/ThemeToggle.svelte";
   import { ThinkingOrb } from "$lib/components/ui/orb";
   import FolderIcon from "@lucide/svelte/icons/folder";
-  import LogOutIcon from "@lucide/svelte/icons/log-out";
   import ImagesIcon from "@lucide/svelte/icons/images";
   import MessageSquareIcon from "@lucide/svelte/icons/message-square";
   import MoreHorizontalIcon from "@lucide/svelte/icons/more-horizontal";
@@ -106,6 +104,9 @@
       {#each nav as item (item.href)}
         {@render railLink(item.label, item.href, item.icon)}
       {/each}
+      <div class="mt-auto pb-1">
+        {@render railLink("Settings", "/settings/general", SettingsIcon)}
+      </div>
     </div>
   {:else}
     <div class="flex h-14 shrink-0 items-center justify-between whitespace-nowrap pl-4 pr-2">
@@ -221,40 +222,16 @@
       <input type="hidden" name="id" value={deletingId} />
     </form>
 
-    <div class="flex items-center gap-0.5 p-2.5">
-      <ThemeToggle />
-      <Tooltip.Root>
-        <Tooltip.Trigger>
-          {#snippet child({ props })}
-            <a
-              {...props}
-              href="/settings/providers"
-              class="rounded-lg p-2 text-muted-foreground hover:bg-sidebar-accent hover:text-foreground"
-              aria-label="Settings"
-            >
-              <SettingsIcon size={16} />
-            </a>
-          {/snippet}
-        </Tooltip.Trigger>
-        <Tooltip.Content>Settings</Tooltip.Content>
-      </Tooltip.Root>
-      <Tooltip.Root>
-        <Tooltip.Trigger>
-          {#snippet child({ props })}
-            <form method="POST" action="/chat?/logout" use:enhance class="contents">
-              <button
-                {...props}
-                type="submit"
-                class="rounded-lg p-2 text-muted-foreground hover:bg-sidebar-accent hover:text-foreground"
-                aria-label="Sign out"
-              >
-                <LogOutIcon size={16} />
-              </button>
-            </form>
-          {/snippet}
-        </Tooltip.Trigger>
-        <Tooltip.Content>Sign out</Tooltip.Content>
-      </Tooltip.Root>
+    <div class="p-2.5">
+      <a
+        href="/settings/general"
+        class="flex items-center gap-2.5 rounded-lg px-2 py-2 text-sm text-sidebar-foreground hover:bg-sidebar-accent hover:text-foreground {isNavActive('/settings')
+          ? 'bg-sidebar-accent text-foreground'
+          : ''}"
+      >
+        <span class="flex w-6 justify-center"><SettingsIcon size={16} class="opacity-75" /></span>
+        Settings
+      </a>
     </div>
   {/if}
 </aside>

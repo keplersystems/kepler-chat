@@ -1,5 +1,8 @@
 <script lang="ts">
+  import { onMount } from "svelte";
+  import { enhance } from "$app/forms";
   import { api } from "$lib/api";
+  import { Button } from "$lib/components/ui/button";
   import { theme, type Theme } from "$lib/state/theme.svelte";
   import { settings, type MotionPreference } from "$lib/state/settings.svelte";
   import { Toggle } from "$lib/components/ui/toggle";
@@ -18,14 +21,20 @@
     { value: "reduced", label: "Reduced" },
   ];
 
-  const thresholds = [70, 80, 90];
+  let autoCompact = $state<boolean | null>(null);
   let savingCompaction = $state(false);
 
+  onMount(async () => {
+    const { data } = await api.api.compaction.get();
+    if (data) autoCompact = data.auto;
+  });
+
   async function setAutoCompact(value: boolean) {
-    settings.setAutoCompact(value);
-    // Keep OpenCode's built-in auto-compaction in step; this restarts its server.
+    autoCompact = value;
+    // Restarts the OpenCode server; config is only read at spawn.
     savingCompaction = true;
-    await api.api.compaction.put({ auto: value });
+    const { error } = await api.api.compaction.put({ auto: value });
+    if (error) autoCompact = !value;
     savingCompaction = false;
   }
 </script>
@@ -82,36 +91,17 @@
       <div>
         <p class="text-sm text-foreground">Auto-compact</p>
         <p class="mt-0.5 text-sm text-muted-foreground">
-          Summarize older messages automatically as the context window fills.
+          Let OpenCode summarize older messages when the context window fills.
         </p>
       </div>
-      <span class={savingCompaction ? "pointer-events-none opacity-60" : ""}>
+      <span class={savingCompaction || autoCompact === null ? "pointer-events-none opacity-60" : ""}>
         <Toggle
-          checked={settings.autoCompact}
+          checked={autoCompact ?? true}
           onCheckedChange={setAutoCompact}
           aria-label="Auto-compact conversations"
         />
       </span>
     </div>
-    {#if settings.autoCompact}
-      <div class="flex items-center justify-between gap-4 py-4">
-        <p class="text-sm text-foreground">Compact when context reaches</p>
-        <div class="flex items-center gap-0.5 rounded-lg bg-secondary p-0.5">
-          {#each thresholds as pct (pct)}
-            <button
-              type="button"
-              onclick={() => settings.setAutoCompactPct(pct)}
-              aria-pressed={settings.autoCompactPct === pct}
-              class="rounded-md px-3 py-1 font-mono text-sm tabular-nums {settings.autoCompactPct === pct
-                ? 'bg-background font-medium text-foreground shadow-xs'
-                : 'text-muted-foreground hover:text-foreground'}"
-            >
-              {pct}%
-            </button>
-          {/each}
-        </div>
-      </div>
-    {/if}
   </div>
 
   <h2 class="mt-8 font-medium text-foreground">Notifications</h2>
@@ -129,5 +119,16 @@
         aria-label="Response completion notifications"
       />
     </div>
+  </div>
+
+  <h2 class="mt-8 font-medium text-foreground">Account</h2>
+  <div class="flex items-center justify-between gap-4 py-4">
+    <div>
+      <p class="text-sm text-foreground">Sign out</p>
+      <p class="mt-0.5 text-sm text-muted-foreground">End this session on this device.</p>
+    </div>
+    <form method="POST" action="/chat?/logout" use:enhance>
+      <Button type="submit" variant="outline" size="sm">Sign out</Button>
+    </form>
   </div>
 </div>

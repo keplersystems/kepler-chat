@@ -258,6 +258,18 @@ Then three small features, all verified live:
   trigger not exercised live (needs a conversation at 80% of a 200K window); logic is the
   same handleCompact path verified manually.
 
+### Honest compaction + settings consolidation
+
+- Removed the Kepler-side percentage auto-compact (user: presenting a client-side threshold
+  as a compaction control was misleading). What remains is real: the Auto-compact toggle is
+  now server-authoritative (GET /api/compaction on mount, PUT writes compaction.auto to
+  global opencode.json + restarts; optimistic flip reverts on error). The pct keys are gone
+  from the settings store.
+- Sidebar footer: theme toggle + sign-out removed; single full-width "Settings" nav row
+  (also pinned at the bottom of the collapsed rail). Theme lives in Settings → Appearance;
+  sign out is a new Settings → Account row (same /chat?/logout action). ThemeToggle.svelte
+  deleted (orphaned); palette/footer links point at /settings/general.
+
 ### Next session cues
 
 - zhipuai still has no balance; fireworks key invalid — first sends on those models error.

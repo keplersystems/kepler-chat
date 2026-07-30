@@ -35,7 +35,7 @@
     { id: "projects", label: "Projects", hint: "Page", href: "/projects", icon: FolderIcon },
     { id: "media", label: "Media", hint: "Page", href: "/media", icon: ImagesIcon },
     { id: "customize", label: "Customize", hint: "Page", href: "/customize", icon: SlidersHorizontalIcon },
-    { id: "settings", label: "Settings", hint: "Page", href: "/settings/providers", icon: Settings2Icon },
+    { id: "settings", label: "Settings", hint: "Page", href: "/settings/general", icon: Settings2Icon },
   ];
 
   const entries = $derived.by<Entry[]>(() => {
