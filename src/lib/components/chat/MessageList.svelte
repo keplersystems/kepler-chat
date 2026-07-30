@@ -1,7 +1,10 @@
 <script lang="ts">
   import type { MessageView } from '$lib/state/chat.svelte';
   import MessageBubble from './MessageBubble.svelte';
+  import { ThinkingOrb } from '$lib/components/ui/orb';
   import { ScrollArea } from '$lib/components/ui/scroll-area';
+  import { fade } from 'svelte/transition';
+  import ArrowDownIcon from '@lucide/svelte/icons/arrow-down';
 
   interface Props {
     messages: MessageView[];
@@ -9,7 +12,7 @@
     onCopy?: (message: MessageView) => void;
     onRegenerate?: (message: MessageView) => void;
     onDelete?: (message: MessageView) => void;
-    onEdit?: (message: MessageView) => void;
+    onEdit?: (message: MessageView, text: string) => void;
     onBranch?: (message: MessageView) => void;
   }
 
@@ -17,66 +20,90 @@
     $props();
 
   let viewport: HTMLElement | null = $state(null);
-  const mergedMessages = $derived.by(() => {
-    const result: MessageView[] = [];
+  let atBottom = $state(true);
 
-    for (const message of messages) {
-      const prev = result.at(-1);
-      const messageText = message.text.trim();
-      const messageReasoning = message.reasoning?.trim() ?? "";
+  const lastMessageId = $derived(messages.at(-1)?.id);
+  const showThinking = $derived(isStreaming && messages.at(-1)?.role !== "assistant");
 
-      const canMergeReasoningOnly =
-        prev &&
-        prev.role === "assistant" &&
-        message.role === "assistant" &&
-        prev.text.trim().length === 0 &&
-        messageText.length === 0 &&
-        (prev.reasoning?.trim().length ?? 0) > 0 &&
-        messageReasoning.length > 0 &&
-        (prev.toolCalls?.length ?? 0) === 0 &&
-        (message.toolCalls?.length ?? 0) === 0;
+  function measureAtBottom() {
+    if (!viewport) return;
+    atBottom = viewport.scrollTop + viewport.clientHeight >= viewport.scrollHeight - 32;
+  }
 
-      if (canMergeReasoningOnly) {
-        result[result.length - 1] = {
-          ...prev,
-          reasoning: `${prev.reasoning}\n\n${message.reasoning}`,
-          finish: message.finish ?? prev.finish,
-        };
-        continue;
-      }
+  function scrollToBottom() {
+    if (!viewport) return;
+    viewport.scrollTop = viewport.scrollHeight;
+  }
 
-      result.push(message);
-    }
-
-    return result;
+  $effect(() => {
+    const el = viewport;
+    if (!el) return;
+    el.addEventListener("scroll", measureAtBottom, { passive: true });
+    return () => el.removeEventListener("scroll", measureAtBottom);
   });
 
   $effect(() => {
     if (!viewport) return;
-    // Track streaming content length so deltas trigger scroll, not just message count.
-    const signal = mergedMessages.reduce(
-      (n, m) => n + m.text.length + (m.reasoning?.length ?? 0),
+    // Track streaming content so deltas trigger scroll, not just message count.
+    const signal = messages.reduce(
+      (n, m) =>
+        n +
+        m.parts.reduce(
+          (p, part) =>
+            p + 1 + ("text" in part && typeof part.text === "string" ? part.text.length : 0),
+          0,
+        ),
       0,
     );
     void signal;
-    viewport.scrollTop = viewport.scrollHeight;
+    if (atBottom) scrollToBottom();
   });
 </script>
 
-<ScrollArea class="flex-1" bind:viewportRef={viewport}>
-  <div class="flex flex-col gap-6 px-6 py-6">
-    {#each mergedMessages as message (message.id)}
-      <MessageBubble {message} {onCopy} {onRegenerate} {onDelete} {onEdit} {onBranch} />
-    {/each}
-    {#if isStreaming}
-      <div class="flex items-center gap-2 pl-10 text-muted-foreground">
-        <div class="flex gap-1">
-          <span class="animate-bounce">●</span>
-          <span class="animate-bounce" style="animation-delay: 0.1s">●</span>
-          <span class="animate-bounce" style="animation-delay: 0.2s">●</span>
+<div class="relative flex-1 min-h-0">
+  <ScrollArea class="h-full" bind:viewportRef={viewport}>
+    <div class="mx-auto flex w-full max-w-[52rem] flex-col gap-7 px-4 py-6 sm:px-6">
+      {#if messages.length === 0 && !isStreaming}
+        <div class="flex flex-col items-center gap-4 py-24 text-center text-muted-foreground">
+          <ThinkingOrb size={64} state="shaping" speed={0.5} />
+          <p class="text-sm">Send a message to begin.</p>
         </div>
-        <span class="text-sm">Thinking...</span>
-      </div>
-    {/if}
-  </div>
-</ScrollArea>
+      {/if}
+      {#each messages as message (message.id)}
+        <div class={isStreaming ? "t-rise" : ""}>
+          <MessageBubble
+            {message}
+            streaming={isStreaming && message.id === lastMessageId && message.role === "assistant"}
+            {onCopy}
+            {onRegenerate}
+            {onDelete}
+            {onEdit}
+            {onBranch}
+          />
+        </div>
+      {/each}
+      {#if showThinking}
+        <div
+          class="flex items-center gap-2.5"
+          in:fade={{ duration: 150 }}
+          out:fade={{ duration: 150 }}
+        >
+          <ThinkingOrb size={20} state="working" />
+          <span class="t-shimmer text-sm" data-text="Thinking…">Thinking…</span>
+        </div>
+      {/if}
+    </div>
+  </ScrollArea>
+
+  {#if !atBottom}
+    <button
+      type="button"
+      onclick={scrollToBottom}
+      transition:fade={{ duration: 150 }}
+      class="absolute bottom-4 left-1/2 -translate-x-1/2 rounded-full border border-border bg-popover p-2 text-muted-foreground shadow-md hover:bg-accent hover:text-accent-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+      aria-label="Jump to latest"
+    >
+      <ArrowDownIcon size={15} />
+    </button>
+  {/if}
+</div>

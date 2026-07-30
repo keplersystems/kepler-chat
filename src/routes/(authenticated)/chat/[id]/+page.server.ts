@@ -63,11 +63,23 @@ export const actions: Actions = {
   replyQuestion: async ({ request, params }) => {
     const data = await request.formData();
     const requestId = data.get("requestId");
-    const answer = data.get("answer");
-    if (typeof requestId !== "string" || typeof answer !== "string" || answer.trim().length === 0) {
-      return fail(400, { error: "requestId and answer required" });
+    const questionCount = Number(data.get("questionCount"));
+    if (typeof requestId !== "string" || !Number.isInteger(questionCount) || questionCount < 1) {
+      return fail(400, { error: "requestId and questionCount required" });
     }
-    await replyQuestion(params.id, requestId, [[answer.trim()]]);
+    const answers: string[][] = [];
+    for (let i = 0; i < questionCount; i++) {
+      const values = data
+        .getAll(`answer-${i}`)
+        .filter((v): v is string => typeof v === "string")
+        .map((v) => v.trim())
+        .filter((v) => v.length > 0);
+      if (values.length === 0) {
+        return fail(400, { error: `Answer required for question ${i + 1}` });
+      }
+      answers.push(values);
+    }
+    await replyQuestion(params.id, requestId, answers);
     return { success: true };
   },
 

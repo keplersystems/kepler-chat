@@ -1,35 +1,36 @@
 <script lang="ts">
-  import type { ConversationDTO, PendingRequestDTO } from "$lib/contracts";
+  import { slide } from "svelte/transition";
+  import { cubicOut } from "svelte/easing";
+  import type { Message, Part } from "@opencode-ai/sdk/v2";
+  import type { ConversationDTO, PendingRequestDTO, ProjectDTO } from "$lib/contracts";
   import { browser } from "$app/environment";
+  import { goto, invalidateAll } from "$app/navigation";
   import { api } from "$lib/api";
-  import { chat, toMessageViewList } from "$lib/state/chat.svelte";
-  import type { ModelSelection, Provider } from "$lib/types";
-  import ChatLayout from "$lib/components/chat/ChatLayout.svelte";
+  import { chat, toMessageViewList, type MessageView } from "$lib/state/chat.svelte";
+  import { fileAttachmentInput, messageText } from "$lib/messages";
+  import { modelCatalog } from "$lib/state/providers.svelte";
+  import type { ModelSelection } from "$lib/types";
   import MessageList from "$lib/components/chat/MessageList.svelte";
   import MessageInput from "$lib/components/chat/MessageInput.svelte";
   import RequestDialog from "$lib/components/chat/RequestDialog.svelte";
+  import TodoRail from "$lib/components/chat/TodoRail.svelte";
   import OutputFilesSidebar from "$lib/components/chat/OutputFilesSidebar.svelte";
-  import * as Tooltip from "$lib/components/ui/tooltip";
-  import RefreshCwIcon from "@lucide/svelte/icons/refresh-cw";
 
   interface Props {
     data: {
       conversations: ConversationDTO[];
+      projects: ProjectDTO[];
       conversation: ConversationDTO;
-      messages: unknown[];
+      messages: Array<{ info: Message; parts: Part[] }>;
       requests: PendingRequestDTO[];
       selectedModel: ModelSelection | null;
     };
   }
 
   const { data }: Props = $props();
-  const localUser = { name: "Local" };
   const FILE_PANEL_STORAGE_PREFIX = "kepler:chat:files-panel-collapsed:";
 
-  let providers = $state<Provider[]>([]);
-  let connectedProviders = $state<string[]>([]);
   let selectedModelOverride = $state<ModelSelection | null>(null);
-  let isLoadingProviders = $state(true);
   let outputFiles = $state<{ path: string; size: number; mtime: string; isDir: boolean }[]>([]);
   let isFilesPanelCollapsed = $state(false);
   let liveTitle = $state<string | null>(null);
@@ -72,7 +73,9 @@
   $effect(() => {
     void conversationId;
     loadFiles();
-    loadProviders();
+    modelCatalog.load().then(() => {
+      if (!selectedModel) selectedModelOverride = modelCatalog.defaultModel();
+    });
   });
 
   async function loadFiles() {
@@ -86,37 +89,76 @@
     }
   }
 
-  async function loadProviders() {
-    isLoadingProviders = true;
-    const { data: response, error } = await api.api.providers.get();
-    if (error || !response) {
-      isLoadingProviders = false;
-      return;
-    }
-    providers = (response.providers.all ?? []) as Provider[];
-    connectedProviders = response.providers.connected ?? [];
-
-    if (!selectedModel && connectedProviders.length > 0 && providers.length > 0) {
-      const firstConnected = providers.find((p) => connectedProviders.includes(p.id));
-      const modelEntries = firstConnected?.models ? Object.entries(firstConnected.models) : [];
-      if (firstConnected && modelEntries.length > 0) {
-        const [modelId, model] = modelEntries[0];
-        selectedModelOverride = {
-          providerID: firstConnected.id,
-          modelID: model.id ?? modelId,
-        };
-      }
-    }
-    isLoadingProviders = false;
-  }
-
   async function handleModelChange(model: ModelSelection) {
     selectedModelOverride = model;
+    modelCatalog.remember(model);
     await api.api.conversations({ id: conversationId }).model.put(model);
   }
 
-  async function handleSendMessage(text: string, model: ModelSelection, files?: File[]) {
-    if (!text.trim() && (!files || files.length === 0)) return false;
+  async function handleBranch(message: MessageView) {
+    const { data: created, error } = await api.api
+      .conversations({ id: conversationId })
+      .branch.post({ messageID: message.id });
+    if (error || !created || "error" in created) {
+      chat.setError("Failed to branch conversation");
+      return;
+    }
+    await goto(`/chat/${created.id}`);
+  }
+
+  async function handleEdit(message: MessageView, text: string) {
+    if (!selectedModel || chat.isStreamingFor(conversationId)) return;
+    chat.setError(null);
+    const { error } = await api.api
+      .conversations({ id: conversationId })
+      .revert.post({ messageID: message.id });
+    if (error) {
+      chat.setError("Failed to edit message");
+      return;
+    }
+    await invalidateAll();
+    const attachments = message.parts
+      .filter((part) => part.type === "file")
+      .map(fileAttachmentInput)
+      .filter((a) => a !== null);
+    await chat.send(
+      conversationId,
+      { text, model: selectedModel, attachments },
+      (title) => (liveTitle = title),
+    );
+  }
+
+  function handleRegenerate(message: MessageView) {
+    const index = visibleMessages.findIndex((m) => m.id === message.id);
+    const previousUser = visibleMessages
+      .slice(0, index)
+      .reverse()
+      .find((m) => m.role === "user");
+    if (!previousUser) return;
+    void handleEdit(previousUser, messageText(previousUser));
+  }
+
+  async function handleDeleteMessage(message: MessageView) {
+    const { error } = await api.api
+      .conversations({ id: conversationId })
+      .messages({ messageID: message.id })
+      .delete();
+    if (error) {
+      chat.setError("Failed to delete message");
+      return;
+    }
+    await invalidateAll();
+  }
+
+  async function handleSendMessage(
+    text: string,
+    model: ModelSelection,
+    files?: File[],
+    mediaIds?: string[],
+    variant?: string,
+  ) {
+    if (!text.trim() && (!files || files.length === 0) && (!mediaIds || mediaIds.length === 0))
+      return false;
     chat.setError(null);
 
     const attachments: Array<{ path: string; mimeType?: string; filename?: string }> = [];
@@ -139,9 +181,20 @@
       }
     }
 
+    for (const mediaId of mediaIds ?? []) {
+      const { data: linked, error: linkError } = await api.api
+        .conversations({ id: conversationId })
+        .files["from-library"].post({ mediaId });
+      if (linkError || !linked || "error" in linked) {
+        chat.setError("Failed to attach from library");
+        return false;
+      }
+      attachments.push(linked.file);
+    }
+
     const succeeded = await chat.send(
       conversationId,
-      { text, model, attachments },
+      { text, model, attachments, variant },
       (title) => (liveTitle = title),
     );
     if (succeeded) {
@@ -149,60 +202,65 @@
     }
     return succeeded;
   }
-
 </script>
 
-<ChatLayout
-  conversations={data.conversations}
-  currentConversationId={conversationId}
-  user={localUser}
->
-  <div class="flex h-full">
-    <div class="flex flex-1 flex-col min-w-0">
-      <header class="flex h-14 items-center justify-between border-b px-4">
-        <h1 class="truncate text-lg font-semibold">{headerTitle}</h1>
-        <div class="flex items-center gap-2">
-          <Tooltip.Root>
-            <Tooltip.Trigger
-              onclick={loadFiles}
-              class="rounded-md p-2 text-muted-foreground hover:bg-accent hover:text-accent-foreground"
-              aria-label="Refresh files"
-            >
-              <RefreshCwIcon size={16} />
-            </Tooltip.Trigger>
-            <Tooltip.Content>Refresh files</Tooltip.Content>
-          </Tooltip.Root>
-        </div>
-      </header>
+<div class="flex h-full">
+  <div class="flex min-w-0 flex-1 flex-col">
+    <header class="flex h-12 shrink-0 items-center px-4 max-md:pl-14">
+      {#key headerTitle}
+        <h1 class="t-rise truncate text-sm font-medium text-foreground/90">{headerTitle}</h1>
+      {/key}
+    </header>
 
-      <MessageList messages={visibleMessages} isStreaming={chat.isStreaming} />
+    {#if chat.isStreamingFor(conversationId)}
+      <TodoRail todos={chat.todosFor(conversationId)} />
+    {/if}
 
-      {#if chat.lastError}
-        <div class="border-t bg-destructive/10 px-4 py-2 text-sm text-destructive">
+    <MessageList
+      messages={visibleMessages}
+      isStreaming={chat.isStreamingFor(conversationId)}
+      onBranch={handleBranch}
+      onDelete={handleDeleteMessage}
+      onEdit={handleEdit}
+      onRegenerate={handleRegenerate}
+    />
+
+    {#if chat.lastError}
+      <div
+        class="mx-auto w-full max-w-[52rem] px-4"
+        transition:slide={{ duration: 240, easing: cubicOut }}
+      >
+        <div class="mb-2 rounded-lg border border-destructive/30 bg-destructive/10 px-3 py-2 text-sm text-destructive">
           {chat.lastError}
         </div>
-      {/if}
-
-      <MessageInput
-        onSubmit={handleSendMessage}
-        disabled={chat.isStreaming || isLoadingProviders}
-        placeholder={isLoadingProviders ? "Loading models..." : "Message..."}
-        {providers}
-        {connectedProviders}
-        {selectedModel}
-        onModelChange={handleModelChange}
-      />
-    </div>
-
-    {#if outputFiles.length > 0}
-      <OutputFilesSidebar
-        {conversationId}
-        files={outputFiles}
-        bind:collapsed={isFilesPanelCollapsed}
-        onRefresh={loadFiles}
-      />
+      </div>
     {/if}
+
+    <div class="px-4 pb-4">
+      <div class="mx-auto w-full max-w-[52rem]">
+        <MessageInput
+          onSubmit={handleSendMessage}
+          disabled={modelCatalog.loading}
+          isStreaming={chat.isStreamingFor(conversationId)}
+          onStop={() => chat.stop(conversationId)}
+          placeholder="Reply…"
+          providers={modelCatalog.providers}
+          connectedProviders={modelCatalog.connected}
+          {selectedModel}
+          onModelChange={handleModelChange}
+        />
+      </div>
+    </div>
   </div>
 
-  <RequestDialog request={currentRequest} />
-</ChatLayout>
+  {#if outputFiles.length > 0}
+    <OutputFilesSidebar
+      {conversationId}
+      files={outputFiles}
+      bind:collapsed={isFilesPanelCollapsed}
+      onRefresh={loadFiles}
+    />
+  {/if}
+</div>
+
+<RequestDialog request={currentRequest} />

@@ -25,6 +25,7 @@ export interface ModelCapabilities {
 }
 
 export interface ProviderModel {
+  variants?: Record<string, Record<string, unknown>>;
   id?: string;
   name?: string;
   family?: string;
