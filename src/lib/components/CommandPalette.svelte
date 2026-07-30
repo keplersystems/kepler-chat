@@ -1,6 +1,7 @@
 <script lang="ts">
   import { goto } from "$app/navigation";
-  import type { ConversationDTO, ProjectDTO } from "$lib/contracts";
+  import { api } from "$lib/api";
+  import type { ConversationDTO, MessageSearchResult, ProjectDTO } from "$lib/contracts";
   import { Dialog } from "bits-ui";
   import FolderIcon from "@lucide/svelte/icons/folder";
   import ImagesIcon from "@lucide/svelte/icons/images";
@@ -20,6 +21,7 @@
   interface Entry {
     id: string;
     label: string;
+    detail?: string;
     hint: string;
     href: string;
     icon: typeof PlusIcon;
@@ -28,6 +30,22 @@
   let open = $state(false);
   let query = $state("");
   let activeIndex = $state(0);
+  let messageResults = $state<MessageSearchResult[]>([]);
+  let searchTimer: ReturnType<typeof setTimeout>;
+
+  $effect(() => {
+    const q = query.trim();
+    clearTimeout(searchTimer);
+    if (!open || q.length < 2) {
+      messageResults = [];
+      return;
+    }
+    searchTimer = setTimeout(async () => {
+      const { data, error } = await api.api.search.get({ query: { q } });
+      if (!error && data) messageResults = data.results;
+    }, 200);
+    return () => clearTimeout(searchTimer);
+  });
 
   const actions: Entry[] = [
     { id: "new", label: "New chat", hint: "Action", href: "/chat", icon: PlusIcon },
@@ -57,8 +75,16 @@
         icon: MessageSquareIcon,
       })),
     ];
-    const matches = q ? all.filter((e) => e.label.toLowerCase().includes(q)) : all;
-    return matches.slice(0, 12);
+    const matches = (q ? all.filter((e) => e.label.toLowerCase().includes(q)) : all).slice(0, 8);
+    const messages = messageResults.slice(0, 6).map((r, i) => ({
+      id: `message:${r.conversationId}:${i}`,
+      label: r.title,
+      detail: r.snippet,
+      hint: "Message",
+      href: `/chat/${r.conversationId}`,
+      icon: SearchIcon,
+    }));
+    return [...matches, ...messages];
   });
 
   $effect(() => {
@@ -131,7 +157,12 @@
                 : 'text-muted-foreground'}"
             >
               <entry.icon size={15} class="shrink-0 opacity-70" />
-              <span class="min-w-0 flex-1 truncate">{entry.label}</span>
+              <span class="min-w-0 flex-1 truncate">
+                {entry.label}
+                {#if entry.detail}
+                  <span class="ml-1.5 text-xs text-muted-foreground/70">{entry.detail}</span>
+                {/if}
+              </span>
               <span class="shrink-0 text-xs text-muted-foreground/70">{entry.hint}</span>
             </button>
           </li>
