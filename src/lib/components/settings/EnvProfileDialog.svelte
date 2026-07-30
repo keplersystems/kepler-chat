@@ -2,7 +2,9 @@
   import { enhance } from "$app/forms";
   import type { EnvSchema } from "$lib/types";
   import { Button } from "$lib/components/ui/button";
+  import { Input } from "$lib/components/ui/input";
   import * as Dialog from "$lib/components/ui/dialog";
+  import { ThinkingOrb } from "$lib/components/ui/orb";
 
   interface Props {
     open: boolean;
@@ -45,44 +47,44 @@
             if (result.type === "success") onClose();
           };
         }}
-        class="space-y-4 max-h-[60vh] overflow-y-auto"
+        class="max-h-[60vh] space-y-4 overflow-y-auto"
       >
         <input type="hidden" name="providerId" value={providerId} />
 
         {#each schema.envSchema as field (field.key)}
           <div>
-            <label for={field.key} class="text-sm font-medium">
+            <label for={field.key} class="font-mono text-sm font-medium">
               {field.key}
               {#if field.inputKind === "secret"}
-                <span class="text-xs text-muted-foreground ml-1">(secret)</span>
+                <span class="ml-1 font-sans text-xs text-muted-foreground">(secret)</span>
               {:else if field.inputKind === "file_path"}
-                <span class="text-xs text-muted-foreground ml-1">(file)</span>
+                <span class="ml-1 font-sans text-xs text-muted-foreground">(file)</span>
               {/if}
             </label>
             {#if field.description}
-              <p class="text-xs text-muted-foreground mb-1">{field.description}</p>
+              <p class="mb-1 text-xs text-muted-foreground">{field.description}</p>
             {/if}
             {#if field.inputKind === "file_path"}
-              <input
+              <Input
                 id={field.key}
                 name={field.key}
                 type="file"
-                class="mt-1 flex w-full rounded-md border border-input bg-card px-3 py-2 text-sm shadow-xs file:border-0 file:bg-transparent file:text-sm file:font-medium placeholder:text-muted-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+                class="mt-1 file:border-0 file:bg-transparent file:text-sm file:font-medium"
               />
             {:else}
-              <input
+              <Input
                 id={field.key}
                 name={field.key}
                 type={field.inputKind === "secret" ? "password" : "text"}
                 value={initialValues[field.key] ?? ""}
                 placeholder={field.placeholder ?? ""}
-                class="mt-1 flex h-9 w-full rounded-md border border-input bg-card px-3 py-1 text-sm shadow-xs placeholder:text-muted-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+                class="mt-1"
               />
             {/if}
           </div>
         {/each}
 
-        <Dialog.Footer class="border-t">
+        <Dialog.Footer class="border-t border-border">
           <Button type="button" variant="outline" onclick={onClose}>Cancel</Button>
           <Button type="submit" disabled={submitting}>
             {submitting ? "Saving..." : "Save Configuration"}
@@ -90,7 +92,9 @@
         </Dialog.Footer>
       </form>
     {:else}
-      <div class="text-muted-foreground">Loading form...</div>
+      <div class="flex justify-center py-8 text-muted-foreground">
+        <ThinkingOrb size={20} state="searching" />
+      </div>
     {/if}
   </Dialog.Content>
 </Dialog.Root>

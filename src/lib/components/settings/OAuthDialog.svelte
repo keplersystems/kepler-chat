@@ -1,6 +1,7 @@
 <script lang="ts">
   import { enhance } from "$app/forms";
   import { Button } from "$lib/components/ui/button";
+  import { Input } from "$lib/components/ui/input";
   import * as Dialog from "$lib/components/ui/dialog";
 
   interface Props {
@@ -44,7 +45,7 @@
         href={url}
         target="_blank"
         rel="noopener noreferrer"
-        class="text-primary hover:underline break-all"
+        class="break-all font-mono text-sm text-primary hover:underline"
       >
         {url}
       </a>
@@ -69,12 +70,12 @@
           <label for="oauth-code" class="text-sm font-medium">
             Authorization Code (if required)
           </label>
-          <input
+          <Input
             id="oauth-code"
             name="code"
             type="text"
             placeholder="Paste code if provider returned one"
-            class="flex h-9 w-full rounded-md border border-input bg-card px-3 py-1 text-sm shadow-xs placeholder:text-muted-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+            class="font-mono"
           />
 
           <Dialog.Footer>
