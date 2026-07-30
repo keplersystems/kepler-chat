@@ -16,6 +16,7 @@ import { instructionsRoute } from "./routes/instructions";
 import { usageRoute } from "./routes/usage";
 import { searchRoute } from "./routes/search";
 import { permissionsRoute } from "./routes/permissions";
+import { compactionRoute } from "./routes/compaction";
 
 export const app = new Elysia()
   .use(
@@ -66,6 +67,7 @@ export const app = new Elysia()
   .use(instructionsRoute)
   .use(usageRoute)
   .use(searchRoute)
-  .use(permissionsRoute);
+  .use(permissionsRoute)
+  .use(compactionRoute);
 
 export type App = typeof app;

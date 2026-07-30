@@ -538,21 +538,25 @@
           </span>
         {:else if contextPct > 0}
           {#if onCompact}
-            <Tooltip.Root>
-              <Tooltip.Trigger
-                onclick={compact}
-                disabled={isStreaming}
+            <DropdownMenu.Root>
+              <DropdownMenu.Trigger
                 class="shrink-0 rounded-md px-1 py-0.5 font-mono text-[10px] tabular-nums {contextPct >= 85
                   ? 'text-destructive'
                   : 'text-muted-foreground/70'} hover:bg-accent hover:text-foreground"
-                aria-label="Compact conversation"
+                aria-label="Context usage"
               >
                 {contextPct}% ctx
-              </Tooltip.Trigger>
-              <Tooltip.Content>
-                ~{contextTokens.toLocaleString()} of {contextLimit.toLocaleString()} tokens — click to compact
-              </Tooltip.Content>
-            </Tooltip.Root>
+              </DropdownMenu.Trigger>
+              <DropdownMenu.Content align="end" class="min-w-[13rem]">
+                <p class="px-2.5 py-1.5 font-mono text-xs tabular-nums text-muted-foreground">
+                  ~{contextTokens.toLocaleString()} / {contextLimit.toLocaleString()} tokens
+                </p>
+                <DropdownMenu.Separator />
+                <DropdownMenu.Item disabled={isStreaming} onSelect={compact}>
+                  Compact conversation
+                </DropdownMenu.Item>
+              </DropdownMenu.Content>
+            </DropdownMenu.Root>
           {:else}
             <span
               class="shrink-0 font-mono text-[10px] tabular-nums {contextPct >= 85

@@ -244,6 +244,20 @@ Then three small features, all verified live:
   providerID/modelID optional but the server requires them — pass the conversation's stored
   model. Verified live: 12,085 → 1,192 tokens (6% → 1%), summary message rendered.
 
+### Compaction controls (mobile-safe + auto)
+
+- ctx% is no longer tap-to-compact: it opens a dropdown showing exact usage
+  ("~N / M tokens") with "Compact conversation" as an explicit item — safe on touch,
+  richer than the old hover tooltip. Verified in browser.
+- Settings → General → Context: "Auto-compact" toggle + threshold segmented (70/80/90,
+  default 80, localStorage). The toggle also writes `compaction.auto` into the global
+  opencode.json via updateOpencodeConfig + server restart (verified both directions on
+  disk), so OFF disables OpenCode's built-in auto-compaction too. OpenCode has no percent
+  knob (its trigger is buffer-based), so the threshold is Kepler-side: after a successful
+  send, if lastTokens/contextLimit ≥ threshold, the page auto-runs compact. Threshold
+  trigger not exercised live (needs a conversation at 80% of a 200K window); logic is the
+  same handleCompact path verified manually.
+
 ### Next session cues
 
 - zhipuai still has no balance; fireworks key invalid — first sends on those models error.

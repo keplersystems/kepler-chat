@@ -9,6 +9,7 @@
   import { chat, toMessageViewList, type MessageView } from "$lib/state/chat.svelte";
   import { fileAttachmentInput, messageText } from "$lib/messages";
   import { modelCatalog } from "$lib/state/providers.svelte";
+  import { settings } from "$lib/state/settings.svelte";
   import type { ModelSelection } from "$lib/types";
   import MessageList from "$lib/components/chat/MessageList.svelte";
   import MessageInput from "$lib/components/chat/MessageInput.svelte";
@@ -53,6 +54,14 @@
     [...visibleMessages].reverse().find((m) => m.role === "assistant" && m.tokens?.total)?.tokens
       ?.total ?? 0,
   );
+  const contextLimit = $derived.by(() => {
+    if (!selectedModel) return 0;
+    const provider = modelCatalog.providers.find((p) => p.id === selectedModel.providerID);
+    const model = Object.values(provider?.models ?? {}).find(
+      (m) => m.id === selectedModel.modelID,
+    );
+    return model?.limit?.context ?? 0;
+  });
 
   $effect(() => {
     chat.setPendingRequests(data.requests);
@@ -218,6 +227,13 @@
     );
     if (succeeded) {
       await loadFiles();
+      if (
+        settings.autoCompact &&
+        contextLimit > 0 &&
+        contextTokens / contextLimit >= settings.autoCompactPct / 100
+      ) {
+        await handleCompact();
+      }
     }
     return succeeded;
   }

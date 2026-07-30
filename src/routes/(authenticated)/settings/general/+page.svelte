@@ -1,4 +1,5 @@
 <script lang="ts">
+  import { api } from "$lib/api";
   import { theme, type Theme } from "$lib/state/theme.svelte";
   import { settings, type MotionPreference } from "$lib/state/settings.svelte";
   import { Toggle } from "$lib/components/ui/toggle";
@@ -16,6 +17,17 @@
     { value: "system", label: "System" },
     { value: "reduced", label: "Reduced" },
   ];
+
+  const thresholds = [70, 80, 90];
+  let savingCompaction = $state(false);
+
+  async function setAutoCompact(value: boolean) {
+    settings.setAutoCompact(value);
+    // Keep OpenCode's built-in auto-compaction in step; this restarts its server.
+    savingCompaction = true;
+    await api.api.compaction.put({ auto: value });
+    savingCompaction = false;
+  }
 </script>
 
 <div class="max-w-2xl">
@@ -62,6 +74,44 @@
         {/each}
       </div>
     </div>
+  </div>
+
+  <h2 class="mt-8 font-medium text-foreground">Context</h2>
+  <div class="divide-y divide-border">
+    <div class="flex items-center justify-between gap-4 py-4">
+      <div>
+        <p class="text-sm text-foreground">Auto-compact</p>
+        <p class="mt-0.5 text-sm text-muted-foreground">
+          Summarize older messages automatically as the context window fills.
+        </p>
+      </div>
+      <span class={savingCompaction ? "pointer-events-none opacity-60" : ""}>
+        <Toggle
+          checked={settings.autoCompact}
+          onCheckedChange={setAutoCompact}
+          aria-label="Auto-compact conversations"
+        />
+      </span>
+    </div>
+    {#if settings.autoCompact}
+      <div class="flex items-center justify-between gap-4 py-4">
+        <p class="text-sm text-foreground">Compact when context reaches</p>
+        <div class="flex items-center gap-0.5 rounded-lg bg-secondary p-0.5">
+          {#each thresholds as pct (pct)}
+            <button
+              type="button"
+              onclick={() => settings.setAutoCompactPct(pct)}
+              aria-pressed={settings.autoCompactPct === pct}
+              class="rounded-md px-3 py-1 font-mono text-sm tabular-nums {settings.autoCompactPct === pct
+                ? 'bg-background font-medium text-foreground shadow-xs'
+                : 'text-muted-foreground hover:text-foreground'}"
+            >
+              {pct}%
+            </button>
+          {/each}
+        </div>
+      </div>
+    {/if}
   </div>
 
   <h2 class="mt-8 font-medium text-foreground">Notifications</h2>
