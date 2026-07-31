@@ -2,6 +2,7 @@ import type { AgentId } from "$lib/contracts";
 import { HttpError } from "$lib/server/http-error";
 import type { EngineDriver } from "./types";
 import { createClaudeDriver } from "./drivers/claude/driver";
+import { createCodexDriver } from "./drivers/codex/driver";
 
 /** Engines whose drivers are not yet implemented reject with 501 at use. */
 function stubDriver(id: AgentId, name: string): EngineDriver {
@@ -53,7 +54,7 @@ function stubDriver(id: AgentId, name: string): EngineDriver {
 
 const factories: Record<AgentId, () => EngineDriver> = {
   claude: createClaudeDriver,
-  codex: () => stubDriver("codex", "Codex"),
+  codex: createCodexDriver,
   opencode: () => stubDriver("opencode", "OpenCode"),
 };
 
