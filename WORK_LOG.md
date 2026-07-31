@@ -1,5 +1,377 @@
 # Work Log
 
+## 2026-07-31 — Edit and "Ask again" removed (honesty follow-up)
+
+The earlier honesty pass reframed Edit as "send a correction as a new turn" and
+Regenerate as "Ask again". User called the Edit reframing out as still dishonest:
+the in-place textarea over the original bubble (pencil icon, "Edit & resend"
+tooltip, Send button) promises replacement semantics that ACP cannot deliver —
+the text was appended as a new message and the original bubble reappeared
+unchanged. "Ask again" was honestly named but functionally weak (the agent's
+first answer stays in context, so it often just restates it). Decision: delete
+both rather than rename.
+
+Removed: editing state/UI and both hover buttons in MessageBubble; the
+onEdit/onRegenerate props through MessageList; handleEdit/handleRegenerate in
+chat/[id]/+page.svelte; `fileAttachmentInput` (its only caller was handleEdit)
+and the `path` field on file PartView (existed solely so re-send could rebuild
+attachments — pump, echo, and contract no longer write it; old persisted rows
+carrying it are ignored harmlessly). Message actions are now Copy only.
+
+Verified: svelte-check 0 errors, vite build clean.
+
+## 2026-07-31 — ACP migration (in progress)
+
+### Goal
+Rewrite Kepler's engine layer from OpenCode-SDK-specific to a proper ACP client.
+Agents become pluggable subprocesses speaking ACP v1 over stdio:
+- `opencode acp` (existing engine, now one agent among several)
+- `@agentclientprotocol/claude-agent-acp` (Claude Code via Agent SDK; subscription auth via `~/.claude/.credentials.json`)
+- `codex-acp` (Codex CLI; ChatGPT auth via `~/.codex/auth.json`)
+
+Breaking changes allowed, nothing in prod, no compatibility shims. Kepler DB becomes
+the source of truth for conversations/messages/usage; model metadata comes from
+models.dev `api.json` directly (same dataset OpenCode uses).
+
+### Verified groundwork (probed live earlier this session)
+- `opencode acp` (1.17.20): protocol v1, loadSession, session list/resume/fork/close,
+  MCP http/sse, image+embeddedContext prompts. Auth method = "run `opencode auth login`".
+- `claude-agent-acp` (0.64.0): protocol v1, list/resume/fork/close/delete, loadSession,
+  providers cap (unstable), logout, prompt queueing + steering via _meta. Empty authMethods
+  (uses whatever `~/.claude/.credentials.json` holds).
+- `@agentclientprotocol/sdk` 1.3.0 cloned at references/typescript-sdk. Stable v1 has:
+  session/list+load+resume+fork+delete+close, set_config_option, set_mode,
+  usage_update (context used/size + cumulative Cost) as stable SessionUpdate variant,
+  session_info_update (titles), available_commands_update. UNSTABLE (avoid): providers/*,
+  per-turn token Usage detail, MCP-over-ACP, document sync, NES.
+- models.dev `api.json`: full provider/model catalog (capabilities, limits, cost incl.
+  cache pricing). OpenCode caches it at ~/.cache/opencode/models.json.
+
+### Architecture decisions (draft, pending survey reports)
+- One supervised subprocess per agent type, sessions multiplexed over one ACP
+  connection (cwd is per-session at session/new). Respawn on crash; sessions
+  reloaded lazily via session/load on next use.
+- Keep the detached "generation pump" pattern from src/lib/server/messages.ts
+  (server-owned prompt loop + replayable event log + SSE fan-out) but feed it from
+  ACP `session.nextUpdate()` instead of OpenCode event.subscribe.
+- Kepler-owned SSE contract (no more OpenCode Event passthrough): translate ACP
+  SessionUpdate into our own wire events; persist messages/parts/usage to Kepler DB
+  as they stream. FTS over Kepler tables replaces opencode-db reads.
+- Permissions: ACP requestPermission is a *server-answered request* → pending-request
+  broker per conversation, surfaced over SSE, answered via POST, promise resolved.
+- Client capabilities: decline fs + terminal in v1 (agents use their own tools;
+  web chat has no editor buffers). Revisit later.
+- Agent env injection: keep encrypted env-profile system, generalized per agent
+  (OpenCode keeps OpenRouter/API keys via env; claude/codex auth via their own CLI files).
+
+### Survey answers (3 subagent reports, condensed copies in session scratchpad)
+1. usage_update: yes on all three. opencode emits it only at end-of-prompt (+after load/fork/resume),
+   cost = cumulative session USD; codex only when totalTokens+contextWindow known; claude streams it.
+   Per-turn token detail rides on PromptResponse.usage (UNSTABLE, claude+codex provide).
+2. Model selection = `session/set_config_option` with configId "model" on ALL agents (category
+   "model"); modes are permission/sandbox presets. opencode never pushes config_option_update —
+   refresh from the setSessionConfigOption response.
+3. session/load replays history as session/update notifications BEFORE the response resolves
+   (all agents; opencode also replays on fork; resume never replays). Kepler still owns
+   persistence — replay is only a recovery path.
+4. sandbox.ts = @anthropic-ai/sandbox-runtime (bwrap): allowWrite=[sessionsRoot] only. Must be
+   generalized: per-agent writable paths (claude needs ~/.claude, codex ~/.codex, opencode its
+   real XDG dirs — see auth decision below).
+5. Skills: opencode reads .opencode/skills up-walk; claude .claude/skills. Decision below.
+6. codex-acp = @agentclientprotocol/codex-acp (TypeScript, npm, bin codex-acp), spawns a codex
+   app-server child (CODEX_PATH); child death surfaces as RequestError code 1001.
+
+### Final design (locked)
+
+**Engine (`src/lib/server/acp/`)**
+- `registry.ts` — static defs for opencode/claude/codex: spawn command, env builder
+  (agent env profiles + per-agent extras like OPENCODE_PERMISSION), sandbox writable paths.
+- `connection.ts` — one supervised subprocess per agent id, lazy start. SDK long-lived form:
+  `client({name:"kepler"}).onRequest(...).onNotification(...).connect(ndJsonStream(stdin, stdout))`.
+  NOT ActiveSession/connectWith (no cancel/setConfig; closes eagerly). initialize handshake caches
+  capabilities. Respawn with backoff; stdin close = clean shutdown. Update router: sessionId →
+  subscriber, registered BEFORE session/new/load (replay precedes responses).
+- `sessions.ts` — conversation.acp_session_id binding; ensureSession(conv): new (cwd=convRoot,
+  mcpServers resolved per scope) / resume-or-load after agent restart. Keep session/new params
+  byte-stable (claude fingerprint teardown). MCP list resent on every load/resume (codex drops it).
+- `pump.ts` — the generation pump (pattern kept from old messages.ts): persist user message →
+  prompt → consume updates → persist parts incrementally → broadcast Kepler SSE envelopes from a
+  replayable log; serialize prompts per conversation; cancellation tracked locally (opencode always
+  reports end_turn). Turn end: finalize assistant row (stop_reason, cost delta from usage_update,
+  tokens from PromptResponse.usage when present), title fallback (session_info_update if emitted,
+  else session/list lookup, else first-user-text truncation).
+- `permissions.ts` (broker) — session/request_permission → pending request (Kepler id), SSE
+  broadcast, POST reply resolves promise with chosen optionId; respond {outcome:"cancelled"} on
+  turn cancel/disconnect. optionIds are agent-specific: UI renders options[] verbatim, keyed by kind.
+- `fs-handlers.ts` — implement fs/read_text_file + fs/write_text_file against conversation root
+  (files.ts safety); REQUIRED: opencode "always allow" edit flow calls client writeTextFile.
+  Advertise fs both; decline terminal (bash renders as text content). elicitation/create supported
+  (claude AskUserQuestion) → question-style dialog; declare clientCapabilities.elicitation.form.
+- `catalog.ts` — models.dev api.json fetch + disk cache (enrichment: context limits, pricing,
+  capability badges keyed by provider/model parsed from config option values).
+
+**Auth stance**: each agent uses its own CLI credential store out-of-band (claude ~/.claude via
+ai-sub-checker swaps, codex ~/.codex, opencode real XDG dirs — no more XDG redirect; `opencode
+auth login` in a terminal is the auth flow). Kepler keeps encrypted env profiles per agent
+(renamed agent_env_profile) injected at spawn (OpenRouter keys etc.). Provider OAuth proxy UI is
+deleted (was OpenCode-server-specific; conflicts with subscription ToS anyway for claude).
+
+**DB (fresh baseline migration, breaking)**
+- conversation: id, agent_id, acp_session_id?, project_id?, title, model_value?, mode_id?,
+  context_used?, context_size?, total_cost, created/updated.
+- message: id, conversation_id FK, role, created/completed, stop_reason?, error?, model_value?,
+  cost (turn delta), tokens JSON?, context_used/size snapshot.
+- part: id, message_id FK, conversation_id, ord, type (text|reasoning|tool|file), content JSON,
+  text (extracted, FTS5 external-content index + triggers).
+- project, media unchanged; provider_env_profile → agent_env_profile (agent_id, env_key, encrypted).
+- Usage dashboards + search aggregate Kepler tables; opencode-db.ts deleted.
+
+**MCP/skills/instructions (engine-agnostic)**
+- MCP servers: Kepler DB table (scope global/project), passed as mcpServers at session
+  new/load/resume. OAuth-brokered connectors are a protocol gap in ACP — connectors UI reduces to
+  url+headers (documented limitation).
+- Skills: Kepler store at sessionsRoot/skills + projectRoot/skills; per-conversation symlinks
+  materialized at provision into <convRoot>/.opencode/skills and .claude/skills (project shadows
+  global); resynced on skill CRUD.
+- Instructions: global + project text concatenated with base conventions into <convRoot>/AGENTS.md
+  (+ CLAUDE.md symlink) at provision; resynced on edits.
+
+**Wire contract (Kepler-owned SSE, replaces OpenCode Event passthrough)**
+message (full MessageView upsert) | part (PartView upsert @ index) | delta {messageId, partId,
+text} | plan | usage {used,size,cost} | title | commands | config {configOptions, modes} |
+permission.asked | permission.settled | turn.end {stopReason, message} | error. Client reducer +
+PartView reshaped to ACP (tool part = toolCallId/kind/status/content incl. diff, locations,
+rawInput/rawOutput).
+
+**UI**
+- New-chat agent picker (opencode/claude/codex + auth status); per-conversation model/mode/config
+  selectors driven by configOptions (models.dev enrichment where value parses provider/model).
+- RequestDialog: permission branch renders ACP options[]; question branch becomes elicitation form.
+- ToolCallCard: ACP statuses + diff/terminal-text content. Usage meter from usage events.
+- Settings: providers page → agents page (status, env profiles, how-to-login instructions);
+  usage page unchanged shape, fed from Kepler tables.
+
+### Status: complete and verified end to end
+
+**Verified against live agents** (dev server + real browser, not code reading):
+- opencode: prompt → streaming deltas → reasoning + text parts → usage → persistence.
+- claude (subscription via `~/.claude/.credentials.json`): full turn, streamed usage,
+  cost 0.19961, cache token accounting, auto-title.
+- codex: reached the agent and returned its real auth error (refresh token revoked) —
+  error propagated cleanly through pump → SSE → persisted assistant row. Run `codex login`.
+- Permission round trip (both agents): request.asked → GET /requests → POST reply →
+  promise resolved → tool executed → output persisted. Agent-specific optionIds
+  (`once/always/reject` on opencode, `allow/allow_always/reject` on claude) render verbatim.
+- Reattach: /live returns 200 with a growing replay log mid-generation (2→3→8 events),
+  204 when idle. Cancel: stopReason=cancelled; a turn cancelled before any output leaves
+  no orphan assistant row.
+- models.dev enrichment: 806 opencode model values, 192 enriched with context limits + pricing.
+- Kepler-owned FTS search and usage aggregation across all three agents.
+- Browser: agent picker, streaming render, config bar (mode/model/effort/agent), context
+  meter, auto-title, agents settings page, usage page, customize pages.
+
+**Bugs found and fixed during verification** (each was a real defect, not a test artifact):
+1. New-chat flow never navigated: `chat.send`'s `invalidateAll()` cancelled the pending
+   `goto`. Fixed by navigating first, then streaming (the store is keyed by conversation id,
+   so the mounted page renders the run that starts right after).
+2. Tool calls left `pending` forever when a turn ended early — finalize now marks
+   non-terminal tool parts `failed` on any non-`end_turn` stop.
+3. Agent-facing plumbing (AGENTS.md, CLAUDE.md, .opencode/, .claude/) leaked into the
+   user-visible Generated Files panel; now excluded via RUNTIME_ENTRIES in routes/files.ts.
+4. Settings agents page never rendered: the module-singleton store's state did not reach
+   that component (two store instances observed; double fetch per load). Fixed by giving
+   the page a `+page.server.ts` load — the app's own convention for settings pages, SSR-
+   rendered, with `invalidateAll()` after mutations. `agentCatalog` remains for the composer
+   picker, where it is verified working.
+
+### Feature parity vs the pre-migration app (audited, not assumed)
+
+Full audit compared every pre-migration endpoint/UI action against the new tree.
+
+**Lost with no ACP equivalent — must not be faked:**
+- `session.revert` (revert-to-message). ACP has no history truncation. This silently broke
+  edit / regenerate / delete-message: they now only delete Kepler DB rows while the agent
+  keeps the original turn *and its reply* in its own transcript. The buttons look unchanged
+  but no longer do what they claim. Pending decision: implement properly if ACP v2 offers a
+  mechanism, otherwise remove/reframe the affordances. Do NOT ship the current state.
+- Branch-at-a-specific-message: ACP `session/fork` takes no message id, so every branch is a
+  tip branch. `MessageBubble` still shows Branch per message and `handleBranch` discards the
+  argument — same honesty problem, same pending decision.
+- MCP connection status + OAuth connect/disconnect: no ACP status probe. Connectors now take
+  a static header; the user cannot see whether a server connected or why it failed.
+- Provider OAuth flows, typed env-schema, credential-file upload: replaced by per-agent env
+  vars + out-of-band CLI login. Deliberate (was OpenCode-server-specific; Claude's
+  subscription is only usable through its own CLI).
+- Auto-compaction toggle: was an OpenCode config flag; agents own this now.
+
+**Restored after the audit:** agent-advertised slash commands (restores manual compaction
+generically via `/compact`), model favorites, per-agent last-model memory, session-mode
+selector (API+engine existed but nothing rendered it), attachment/model compat warning
+(reduced to models.dev's `attachment` flag), MCP per-server timeout, compose-time model
+selection (`GET /api/agents/:id/config` starts the agent once and caches its advertised
+options; the choice rides on `POST /api/conversations` as `modelValue` and is applied by the
+existing `reapplyStoredConfig` when the session is established).
+
+**Slash-command coverage is uneven and that is the agents' doing, not ours:** claude
+advertises 47 commands (incl. `compact`), codex 16 (incl. `compact`), opencode 1.17.20 only 5
+and **no `/compact`**. That gap is version-specific: opencode 1.18.10 implements `compact` in
+its ACP layer (`packages/opencode/src/acp/service.ts:549`), so upgrading the binary restores it
+with no Kepler change — the composer renders whatever the agent advertises. The reference clone
+was refreshed 1.14.28 → 1.18.10 (ACP SDK 0.16.1 → 0.21.0; the old copy predated the current ACP
+module layout entirely).
+
+### ACP v2 investigated — it rescues nothing (schema-level audit, citations in session notes)
+- No history truncation/revert in v1 or v2. `replayFrom` has one variant (`"start"`), is
+  read-only, and changes what the agent re-emits, not what it keeps in context.
+- `session/fork` still takes no message id in v2 (the RFD calls it a future extension).
+- No compaction method; slash commands remain the only route.
+- MCP: the word "oauth" appears nowhere in either schema, and there is no connection-state
+  field. MCP-over-ACP would give status but inverts the transport (Kepler would have to *be*
+  the MCP server), is UNSTABLE, and every adapter advertises `acp: false` or omits it.
+- `providers/*` is still UNSTABLE and is a single gateway override per agent
+  (`main` / `custom-gateway` / none), not a provider catalog.
+- v2 is unusable regardless: all three adapters hardcode `protocolVersion: 1`, the SDK has no
+  client-side version negotiation, and v2 *removes* `fs/*`, `terminal/*`, `session/load` and
+  `session/set_mode` — several of which Kepler depends on.
+- Caveat on our own code: per-turn tokens come from `PromptResponse.usage`, which is UNSTABLE
+  in v1 and deleted in v2. It is real data today on claude/codex and absent elsewhere; the
+  context meter already relies on the stable `usage_update` instead.
+
+### Honesty pass applied (no affordance may promise what ACP cannot do)
+- **Delete message: removed.** Kepler cannot delete from the agent's transcript.
+- **Edit** now sends a correction as a new turn and leaves the original visible, because it is
+  still in the agent's context. **Regenerate → "Ask again"**, same reasoning.
+- **Branch** moved from a per-message menu item (whose message argument was discarded) to a
+  conversation-level action in the chat header, shown only when the agent advertises
+  `sessionCapabilities.fork`. `branchConversation` no longer silently falls back to a
+  memoryless copy — it fails with a clear error instead.
+- **Connectors page** states plainly that ACP reports no MCP connection result.
+- **Per-agent capabilities drive behaviour, not copy.** `GET /api/agents` reports what each
+  agent advertised at initialize; the app acts on it (Branch is offered only where the agent
+  supports fork — verified: codex reports `fork: false`, opencode and claude true). The
+  capability chips that briefly rendered on the agents page were removed: protocol internals
+  are not user-facing, and honesty belongs in what the UI offers, not in explanatory text.
+- The composer only shows controls the agent actually advertises: no model option → no model
+  picker; `modes: null` (opencode) → no mode picker; commands list is whatever the agent sends.
+
+### Quality pass (subagent review, 47 findings; MUST FIX and most SHOULD FIX applied)
+Fixed: dead exports and the dead `$lib/types.ts` (DTOs consolidated in `contracts.ts`);
+`Generation.done` (unreachable); MCP edit silently re-enabling a disabled server; two
+incompatible "is this the model option" predicates unified as `isModelOption`; MCP `timeout`
+removed entirely (it was plumbed through eight sites and never reached ACP — a fake feature);
+dead `DELETE /:id/messages/:messageID` removed; `forkSession` was handed a cwd before the
+directory existed; colliding `{#each}` keys (duplicate keys are a Svelte runtime error);
+`stopAllAgents()` instead of hardcoding opencode in the permissions route; shared `request()`
+helper replacing fivefold fetch boilerplate; store load-guards unified on plain latches;
+`updateCachedConfig` now writes one object to both maps (they held distinct copies);
+`perTurnDelta` shared by token and cost accounting; `downloadFileUrl` shared with the pump;
+search moved out of `usage.ts`; SQL-side filtering instead of JS `.filter()`; enum-typed
+`agent_id`/`stop_reason` columns removing nine casts; dead columns dropped (migration 0002).
+Also fixed a real UX bug it surfaced: the context meter read 0% after reload because persisted
+usage was never surfaced — `GET /:id/config` now returns it and the store seeds from it.
+
+**Also noted:** existing installs lose history — the migration folder was re-baselined and
+there is no import path from OpenCode's DB. Old DB backed up at ../../local.db.pre-acp.bak.
+
+### E2E verification pass (subagent drove the running app; 30+ checks)
+Passing: streaming on all three agents (codex authenticated fine on this machine after all),
+persistence, auto-title, reasoning parts, reattach (200 + full replay mid-run, 204 idle),
+cancel, permission round trips with each agent's own option ids, slash commands, config/model
+switching, files/media/projects/skills/MCP/instructions, search, usage, and 11 pages with zero
+console errors. Message actions confirmed honest: no Delete, no per-message Branch, header
+Branch present for opencode/claude and absent for codex, Edit and "Ask again" append new turns.
+
+**CRITICAL bug it caught and I fixed — the first message of every conversation was dropped.**
+`ensureSession` had no in-flight dedup, and the chat page fires `/config`, `/commands` and
+`/files/output` concurrently with the first `chat.send`. Two callers raced past the
+`acp_session_id === null` check, both ran `session/new`, and the second `bind()` unbound the
+session actually being prompted, so every update for it was discarded — the turn then reported
+`stopReason: "end_turn"` with no message, i.e. silent success with no reply. 5/5 browser sends
+failed before. Fixed two ways: `ensureSession` now shares one in-flight attempt per
+conversation, and a caller holding a stale row (`acp_session_id: null`) adopts the live binding
+instead of creating a second session. Verified: 3/3 racing runs now reply, plus the exact
+curl repro from the report on opencode and claude.
+
+Also fixed from that pass: claude model metadata never enriched (its values are aliases like
+`opus[1m]`/`sonnet`; `parseModelValue` now strips `[…]`/`:` markers, a family index resolves
+aliases to that family's newest model, and an `[1m]` marker overrides the context limit since
+that is exactly what it means) — 4/5 enrich now, `default` correctly stays bare, and
+opencode 793/806 and codex 5/5 are unregressed; context meter blank on cold load (server now
+returns persisted usage and the store seeds from it — verified 14% ctx on reload); model picker
+unusable at 1280×577 because a hardcoded `max-h` overrode bits-ui's collision-aware height
+(search input was at -55px, now +13px and on-screen) and the cap footer now reads
+"Showing N of M"; codex mode desync where `PUT /:id/mode` left the duplicate `mode` config
+option stale; the agent picker's "Running" dot was a snapshot that went stale, so it now shows
+only the stable availability state (liveness lives on Settings → Agents).
+
+Known, not fixed (cosmetic): composer config pickers pop in ~1s after mount; a send attempted
+in that window is refused but the draft is restored, so nothing is lost.
+
+### Corrections to earlier "necessary loss" claims (user pushed back; they were right)
+- **Provider env-key setup was NOT a necessary loss.** models.dev carries the env var list for
+  all 175 providers — the same data the old provider page was built on (OpenCode merely passed
+  it through). Restored as `GET /api/agents/env-vars` feeding a `<datalist>` on the key input,
+  so you pick `ANTHROPIC_API_KEY` from the catalog instead of recalling it. Deliberately not a
+  175-row provider table: the value was never the list, it was not having to know the name.
+- **Per-model modality granularity was NOT a necessary loss.** `ModelInfo` had flattened
+  everything to one `attachment` boolean. It now carries `input`/`output` modality arrays plus
+  `toolCall`, and the picker shows the pre-migration badge set (Vision / Audio / PDF / Video /
+  Image generation / Reasoning / Tool calling). Verified: 97 video-input, 32 audio-input and
+  12 image-output models are now distinguished, and Gemini 2.5 Pro renders all six badges.
+  The composer's compatibility warning is per-modality again ("may not accept video, audio")
+  instead of a single all-or-nothing attachment check.
+
+**Genuinely lost, no data or protocol to rebuild from:** in-app provider OAuth flows;
+per-provider connected/configured status; MCP connection status and OAuth; revert-to-message;
+branch-at-a-message; delete-message; auto-compact toggle; `/compact` for opencode specifically
+(it advertises no built-in commands over ACP); pre-migration conversation history.
+
+### opencode upgraded 1.17.20 → 1.18.10; session config generalized
+- Upgraded via `opencode upgrade` (stock, no local changes). Reference clone refreshed to the
+  matching v1.18.10 tag, clean checkout — the previous clone's local edits are in `stash@{0}`.
+- Re-verified commands: still **5** and still no advertised `compact`. Those five are the user's
+  own custom commands; opencode advertises no built-ins over ACP at any version tested.
+  BUT it *implements* compact (`acp/service.ts:549` → `session.summarize`) and accepts
+  `/compact` when sent — verified live, turn completed cleanly. So the composer now always
+  offers Compact: claude and codex advertise it, opencode honours it unadvertised, and an agent
+  that genuinely lacks it surfaces a normal error rather than a hidden no-op.
+- **Reasoning effort was missing at compose time.** It exists — claude `effort` (thought_level,
+  6 values), codex `reasoning_effort` (5 values); opencode advertises none at all. It rendered
+  on conversation pages but the new-chat composer was filtered to the model option only.
+  Generalized: `conversation.config_options` (JSON) stores every chosen option, the composer
+  offers all of them before the session exists, and `reapplyStoredConfig` reapplies the whole
+  map whenever a session is (re-)established rather than special-casing model and mode.
+  Verified: picking Low effort on a new claude chat persisted `{"effort":"low"}` and the live
+  session reported `effort -> low`. `model_value` remains as the analytics column.
+- Hardened while checking isolation: the capability probe used to open a session with
+  `cwd = sessionsRoot`, sitting above every conversation; it now uses `.probe/<agent>/`.
+
+### Composer controls consolidated (user-directed, modelled on claude.ai)
+Problem 1: reasoning effort showed in a chat but not in the new-chat composer. Root cause was
+not "opencode has no effort" — **opencode's option set depends on the selected model**.
+`opencode/big-pickle` (the agent default) advertises model+mode; `opencode/deepseek-v4-flash-free`
+advertises model+**effort**+mode. The compose page cached the default model's options and never
+refetched. Fixed: `GET /api/agents/:id/config?model=` applies the model to the probe session and
+caches per (agent, model); the composer refetches whenever the chosen model changes.
+
+Problem 2: five sibling dropdowns crowded the composer. Replaced by `SessionConfigMenu`: one
+trigger reading `<model> · <effort>`, opening the searchable model list (favorites, capability
+badges, context) with the remaining options pinned as footer rows that drill into their own
+panel with a back header. Every option stays reachable for every agent; only reasoning effort
+rides in the trigger, since showing all of them recreated the wall of values.
+`select-content.svelte` gained a `footer` snippet so those rows sit outside the scrolling
+viewport. `ConfigOptionPicker` is superseded and deleted.
+Verified live: opencode → `Model · build` + "Session Mode" row; claude → `Fable · Xhigh` +
+Mode/Effort/Agent rows; drill-in shows values with descriptions and the current check.
+
+**Handoff notes**
+- `vite preview` is NOT a valid harness for this app: adapter-auto finds no production
+  environment and emits a relative-base build, so nested routes break there. Test with `bun dev`.
+- Editing server modules mid-run reloads the SSR module graph and orphans in-flight
+  generations; restart the dev server before verifying a streaming change.
+- Old DB backed up at ../../local.db.pre-acp.bak; new baseline migration + FTS triggers applied.
+- Codex needs `codex login` before it will answer.
+
 ## 2026-07-30 night session: stream reattach + palette full-text search
 
 Two features, both browser-verified end to end (send → hard reload mid-generation →
@@ -581,3 +953,73 @@ delegated pieces); 5 projects (backend me); 6 MCP+connectors; 7 skills; 8 artifa
 9 sweep + browser verification. Extras backlog: rename convo, edit/regenerate/branch wiring
 (session.fork/revert), theme toggle, command palette, todo.updated panel, cost display,
 keyboard shortcuts, mobile drawer sidebar.
+
+## 2026-07-31 — ACP migration: server routes rewrite (routes agent)
+
+Executed scratchpad routes-spec.md. Server-side only; client rewrite runs in parallel.
+
+- Rewrote routes: conversations (agentId on create, bodyless branch, dropped
+  compact/revert/model endpoints), messages (Kepler DB listMessages → {messages},
+  pump sendMessageStream/attachMessageStream/cancelGeneration, deleteMessage 404),
+  requests (ACP broker: /requests, /:requestId/permission {optionId},
+  /:requestId/elicitation {action, content?}), usage (buildUsageResponse), search
+  (searchMessageText over Kepler FTS, same snippet/dedupe/cap-20), mcp (new
+  name+projectId signatures, oauth endpoints deleted), skills/instructions/projects
+  (runtime.ts read/write*Instructions), permissions (hostFor("opencode").stop()).
+- New routes: config.ts (GET/PUT /:id/config + PUT /:id/mode, model select options
+  flattened incl. groups, enriched via findModelInfo, cap 200), agents.ts (list
+  statuses, env set/delete + restart via hostFor().stop()).
+- Deleted: routes/{providers,models,compaction}.ts, src/lib/server/opencode/.
+- app.ts remounted (agents+config in, providers/models/compaction out); hooks.server.ts
+  boot block now only wires SIGINT/SIGTERM → stopAllAgents().
+- Service fixes (compile blockers, not spec drift): media.ts imported deleted
+  schema/opencode → schema/kepler; engine.ts elicitation narrowing (custom-mode union
+  member's index signature) + setConfigOption union params broke request() inference
+  (split per branch); pump.ts lastUsage boxed (closure-write narrowing), model option
+  currentValue narrowed to select; connection.ts stdout toWeb cast via unknown.
+- Verified: `bun x tsc --noEmit -p .` has zero errors under src/lib/server/** and
+  src/hooks.server.ts; remaining errors are all in client files owned by the parallel agent.
+
+## 2026-07-31 — agent slash commands (restores compaction)
+
+ACP has no compaction method, but every agent advertises its own slash commands via
+`available_commands_update`. Surfacing those restores `/compact` generically instead of
+special-casing it (the old OpenCode `session.summarize` endpoint is gone).
+
+- Contract: `AgentCommand {name, description?, hint?}` (hint = SDK
+  `AvailableCommandInput.hint`), new `commands` stream event.
+- Engine: `SessionBinding.commands` + `sessionCommandsFor` / `awaitSessionCommands` /
+  `updateCachedCommands`.
+  The cache is written in the update **delegate**, not the pump: agents push commands on
+  a `setTimeout(0)` after session/new and session/load, i.e. usually with no generation
+  running and therefore no pump subscriber. For the same reason session/new now binds
+  before the DB write — the push used to race an unbound session and be dropped.
+- Pump: `available_commands_update` rebroadcasts the cached list; `sendCommandStream`
+  is `sendMessageStream` with text `/name args` (all three agents interpret a leading
+  slash command themselves), so commands share the whole turn path.
+- Routes: `GET|POST /api/conversations/:id/commands` (commands.ts).
+- Client: `chat.commandsFor/setCommands/loadCommands/runCommand`; `send` and `runCommand`
+  now share `startTurn` (echo + SSE consumption differ only by endpoint/body).
+  The composer's ctx badge became the commands dropdown again (token line + separator +
+  items, `/name hint` + description, shimmer while a command turn runs); it renders as
+  `/` before any usage_update has landed. Chat page loads commands after the config load.
+
+Verified live (dev server on :5199, curl, real agents):
+- claude advertises 47 commands incl. `compact` (hint `<optional custom summarization
+  instructions>`), `context`, `model`, `rename`, `usage`, `review`.
+- codex advertises 16 incl. `compact`, `plan`, `status`, `review-branch`, `$skill-creator`.
+- opencode advertises only its skills/custom commands (agent-browser, customize-opencode,
+  init, read-mail, review) — **no `/compact`**: opencode does not advertise built-ins over
+  ACP, so compaction is reachable on claude/codex only.
+- `POST /commands {name:"context"}` → user row `/context`, streamed reply, end_turn.
+  `POST /commands {name:"compact"}` → "Compacting completed." after a real exchange
+  (and "Not enough messages to compact." before one). Args round-trip (`/compact one sentence`).
+- Bug found in the browser (composer had no commands button): the first `GET /commands`
+  raced the push — whichever request establishes the session returns before the agent
+  sends the list (measured: it lands 8-70ms later on all three agents). Fixed with
+  `awaitSessionCommands`: an empty read waits on a waiter set that `updateCachedCommands`
+  resolves, capped at 500ms. First GET now returns 16 (codex) / 5 (opencode) immediately.
+- Browser: codex conversation → dropdown lists its commands with hints and descriptions;
+  clicking `/status` sent the turn and rendered codex's status reply.
+- `bun x svelte-check` 0 errors, `bun x vite build` clean. Probe conversations and the
+  `/status` test messages deleted.

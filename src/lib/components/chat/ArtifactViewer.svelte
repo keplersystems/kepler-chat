@@ -1,7 +1,7 @@
 <script lang="ts">
   import { fade } from "svelte/transition";
   import type { FileEntryDTO, FileScope } from "$lib/contracts";
-  import { downloadFileUrl } from "$lib/api";
+  import { downloadFileUrl } from "$lib/contracts";
   import Markdown from "$lib/components/markdown/Markdown.svelte";
   import CodeBlock from "$lib/components/markdown/CodeBlock.svelte";
   import { buttonVariants } from "$lib/components/ui/button";

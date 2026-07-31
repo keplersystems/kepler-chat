@@ -1,27 +1,20 @@
 import { Elysia, t } from "elysia";
-import { writeFile } from "node:fs/promises";
-import { resolve } from "node:path";
 import { INSTRUCTIONS_MAX_LENGTH } from "$lib/contracts";
 import { requireAuth } from "$lib/server/auth";
-import { readFileOrEmpty } from "$lib/server/files";
-import { getSessionsRoot } from "$lib/server/paths";
-
-function instructionsPath(): string {
-  return resolve(getSessionsRoot(), "AGENTS.md");
-}
+import { readGlobalInstructions, writeGlobalInstructions } from "$lib/server/runtime";
 
 export const instructionsRoute = new Elysia({ prefix: "/api/instructions" })
   .get(
     "/",
     async (context) => {
       requireAuth(context);
-      return { content: await readFileOrEmpty(instructionsPath()) };
+      return { content: await readGlobalInstructions() };
     },
     {
       detail: {
         summary: "Get global instructions",
         tags: ["Settings"],
-        description: "The sessions-root AGENTS.md applied to every conversation",
+        description: "The global instructions merged into every conversation's AGENTS.md",
       },
     },
   )
@@ -29,7 +22,7 @@ export const instructionsRoute = new Elysia({ prefix: "/api/instructions" })
     "/",
     async (context) => {
       requireAuth(context);
-      await writeFile(instructionsPath(), context.body.content, "utf8");
+      await writeGlobalInstructions(context.body.content);
       return { success: true };
     },
     {
@@ -37,7 +30,7 @@ export const instructionsRoute = new Elysia({ prefix: "/api/instructions" })
       detail: {
         summary: "Update global instructions",
         tags: ["Settings"],
-        description: "Overwrite the sessions-root AGENTS.md",
+        description: "Overwrite the global instructions and resync conversation workspaces",
       },
     },
   );

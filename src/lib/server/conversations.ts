@@ -1,146 +1,121 @@
 import { cp, rm } from "node:fs/promises";
 import { eq } from "drizzle-orm";
+import type { AgentId } from "$lib/contracts";
+import { deleteSessionFor, forkSession } from "$lib/server/acp/engine";
 import { db } from "$lib/server/db/client";
-import { conversation } from "$lib/server/db/schema/opencode";
+import { conversation, message, part } from "$lib/server/db/schema/kepler";
 import { HttpError } from "$lib/server/http-error";
 import { generateId } from "$lib/server/ids";
-import { opencodeServer } from "$lib/server/opencode/supervisor";
 import {
   getConversationRoot,
   provisionConversationDirectories,
   type ConversationLocator,
 } from "$lib/server/paths";
+import { materializeConversationRuntime } from "$lib/server/runtime";
 
-export interface CreatedConversation {
-  id: string;
-  session: { id: string; title: string };
-}
+export type ConversationRow = typeof conversation.$inferSelect;
 
 export async function createConversation(
+  agentId: AgentId,
   title: string,
   projectId: string | null = null,
-): Promise<CreatedConversation> {
+  configOptions: Record<string, string> = {},
+): Promise<ConversationRow> {
   const locator: ConversationLocator = { id: generateId(), project_id: projectId };
   const root = getConversationRoot(locator);
-  let openCodeSessionId: string | null = null;
-
   try {
     await provisionConversationDirectories(locator);
-
-    const { client } = await opencodeServer.conversationClient(locator);
-    // No explicit session title: OpenCode only auto-generates titles for
-    // sessions still carrying its own default. Kepler's row holds the
-    // display title until the generated one syncs in.
-    const { data: session, error } = await client.session.create({});
-    if (error || !session) throw new Error("Failed to create OpenCode session");
-    openCodeSessionId = session.id;
-
-    await db.insert(conversation).values({
-      id: locator.id,
-      opencode_session_id: session.id,
-      project_id: projectId,
-      title,
-    });
-
-    return { id: locator.id, session: { id: session.id, title } };
+    await materializeConversationRuntime(locator);
+    const [row] = await db
+      .insert(conversation)
+      .values({
+        id: locator.id,
+        agent_id: agentId,
+        project_id: projectId,
+        title,
+        model_value: configOptions.model ?? null,
+        config_options: Object.keys(configOptions).length > 0 ? JSON.stringify(configOptions) : null,
+      })
+      .returning();
+    return row;
   } catch (err) {
-    if (openCodeSessionId) {
-      const { client } = await opencodeServer.conversationClient(locator);
-      await client.session.delete({ sessionID: openCodeSessionId }).catch(() => {});
-    }
     await rm(root, { recursive: true, force: true });
     throw err;
   }
 }
 
 /**
- * Fork a conversation at a message: copy its working directory (so file state
- * matches the transcript) and fork the OpenCode session into the new directory.
+ * Branch a conversation: copy its working directory (so file state matches the
+ * transcript), copy the message history, and fork the agent's session so the
+ * branch inherits its context. Agents without fork cannot express this, so the
+ * caller must not offer it for them — a memoryless copy would be a lie.
  */
-export async function branchConversation(
-  id: string,
-  messageID?: string,
-): Promise<CreatedConversation> {
+export async function branchConversation(id: string): Promise<ConversationRow> {
   const source = await requireConversation(id);
-  const locator: ConversationLocator = {
-    id: generateId(),
-    project_id: source.project_id,
-  };
+  const locator: ConversationLocator = { id: generateId(), project_id: source.project_id };
   const root = getConversationRoot(locator);
 
   try {
     await cp(getConversationRoot(source), root, { recursive: true });
 
-    const { client } = await opencodeServer.conversationClient(locator);
-    const { data: session, error } = await client.session.fork({
-      sessionID: source.opencode_session_id,
-      messageID,
-    });
-    if (error || !session) throw new Error("Failed to fork OpenCode session");
+    const forkedSessionId = await forkSession(source, { ...source, id: locator.id });
+    if (!forkedSessionId) {
+      throw new HttpError(400, "This agent cannot branch a conversation");
+    }
 
-    const title = `${source.title} (branch)`;
-    await db.insert(conversation).values({
-      id: locator.id,
-      opencode_session_id: session.id,
-      project_id: source.project_id,
-      title,
-      provider_id: source.provider_id,
-      model_id: source.model_id,
-    });
+    const [row] = await db
+      .insert(conversation)
+      .values({
+        id: locator.id,
+        agent_id: source.agent_id,
+        acp_session_id: forkedSessionId,
+        project_id: source.project_id,
+        title: `${source.title} (branch)`,
+        model_value: source.model_value,
+        mode_id: source.mode_id,
+        context_used: source.context_used,
+        context_size: source.context_size,
+        total_cost: source.total_cost,
+        total_tokens: source.total_tokens,
+      })
+      .returning();
 
-    return { id: locator.id, session: { id: session.id, title } };
+    const messages = await db.query.message.findMany({
+      where: (fields, { eq: eqOp }) => eqOp(fields.conversation_id, id),
+    });
+    const parts = await db.query.part.findMany({
+      where: (fields, { eq: eqOp }) => eqOp(fields.conversation_id, id),
+    });
+    const messageIdMap = new Map(messages.map((row) => [row.id, generateId()]));
+    if (messages.length > 0) {
+      await db.insert(message).values(
+        messages.map((row) => ({
+          ...row,
+          id: messageIdMap.get(row.id)!,
+          conversation_id: locator.id,
+        })),
+      );
+    }
+    if (parts.length > 0) {
+      await db.insert(part).values(
+        parts.map((row) => ({
+          ...row,
+          id: generateId(),
+          message_id: messageIdMap.get(row.message_id)!,
+          conversation_id: locator.id,
+        })),
+      );
+    }
+
+    return row;
   } catch (err) {
     await rm(root, { recursive: true, force: true });
     throw err;
   }
 }
 
-export async function deleteConversationMessage(
-  id: string,
-  messageID: string,
-): Promise<void> {
-  const conv = await requireConversation(id);
-  const { client } = await opencodeServer.conversationClient(conv);
-  const { error } = await client.session.deleteMessage({
-    sessionID: conv.opencode_session_id,
-    messageID,
-  });
-  if (error) throw new Error("Failed to delete message");
-}
-
-/** Revert the session to just before `messageID`; the next prompt discards the tail. */
-export async function revertConversation(id: string, messageID: string): Promise<void> {
-  const conv = await requireConversation(id);
-  const { client } = await opencodeServer.conversationClient(conv);
-  const { error } = await client.session.revert({
-    sessionID: conv.opencode_session_id,
-    messageID,
-  });
-  if (error) throw new Error("Failed to revert conversation");
-}
-
-export async function compactConversation(id: string): Promise<void> {
-  const conv = await requireConversation(id);
-  if (!conv.provider_id || !conv.model_id) {
-    throw new HttpError(400, "Send a message first so the conversation has a model");
-  }
-  const { client } = await opencodeServer.conversationClient(conv);
-  const { error } = await client.session.summarize({
-    sessionID: conv.opencode_session_id,
-    providerID: conv.provider_id,
-    modelID: conv.model_id,
-  });
-  if (error) throw new Error("Failed to compact conversation");
-}
-
-export async function renameConversation(id: string, title: string) {
-  const conv = await requireConversation(id);
-  const { client } = await opencodeServer.conversationClient(conv);
-  const { error } = await client.session.update({
-    sessionID: conv.opencode_session_id,
-    title,
-  });
-  if (error) throw new Error("Failed to rename OpenCode session");
+export async function renameConversation(id: string, title: string): Promise<ConversationRow> {
+  await requireConversation(id);
   const [row] = await db
     .update(conversation)
     .set({ title })
@@ -149,7 +124,7 @@ export async function renameConversation(id: string, title: string) {
   return row;
 }
 
-export async function requireConversation(id: string) {
+export async function requireConversation(id: string): Promise<ConversationRow> {
   const conv = await db.query.conversation.findFirst({
     where: (fields, { eq: eqOp }) => eqOp(fields.id, id),
   });
@@ -159,19 +134,13 @@ export async function requireConversation(id: string) {
 
 export async function deleteConversation(id: string): Promise<void> {
   const conv = await requireConversation(id);
-
-  // Best effort: a corrupted or already-removed session must not block the
-  // filesystem and DB teardown — delete stays idempotent.
-  try {
-    const { client } = await opencodeServer.conversationClient(conv);
-    const { error } = await client.session.delete({ sessionID: conv.opencode_session_id });
-    if (error) {
-      console.warn(`OpenCode session ${conv.opencode_session_id} not deleted:`, error);
-    }
-  } catch (err) {
-    console.warn(`OpenCode unreachable while deleting conversation ${id}:`, err);
-  }
-
+  // Best effort: an unreachable agent must not block filesystem and DB
+  // teardown — delete stays idempotent.
+  await deleteSessionFor(conv).catch((err) => {
+    console.warn(`ACP session cleanup failed for conversation ${id}:`, err);
+  });
   await rm(getConversationRoot(conv), { recursive: true, force: true });
+  await db.delete(part).where(eq(part.conversation_id, id));
+  await db.delete(message).where(eq(message.conversation_id, id));
   await db.delete(conversation).where(eq(conversation.id, id));
 }

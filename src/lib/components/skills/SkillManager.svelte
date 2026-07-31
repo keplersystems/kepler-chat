@@ -1,6 +1,6 @@
 <script lang="ts">
   import { api, apiErrorMessage } from "$lib/api";
-  import type { SkillEntry } from "$lib/server/skills";
+  import type { SkillEntry } from "$lib/contracts";
   import {
     ConfirmDeleteDialog,
     ManagerFormDialog,
@@ -47,7 +47,7 @@
   }
 
   function canEdit(skill: SkillEntry): boolean {
-    return !projectId || skill.scope.kind === "project";
+    return !projectId || skill.scope === "project";
   }
 
   function openCreate() {
@@ -95,12 +95,12 @@
   onRetry={manager.retry}
 >
   <ul class="space-y-2">
-    {#each manager.items ?? [] as skill (`${skill.scope.kind}:${skill.name}`)}
+    {#each manager.items ?? [] as skill (`${skill.scope}:${skill.name}`)}
       <li class="flex flex-wrap items-center gap-3 rounded-lg border border-border bg-card p-4">
         <div class="min-w-0 flex-1">
           <div class="flex items-center gap-2">
             <span class="truncate font-mono text-sm font-medium">{skill.name}</span>
-            <Badge>{skill.scope.kind === "global" ? "Global" : "Project"}</Badge>
+            <Badge>{skill.scope === "global" ? "Global" : "Project"}</Badge>
           </div>
           <p class="mt-0.5 truncate text-sm text-muted-foreground">{skill.description}</p>
         </div>

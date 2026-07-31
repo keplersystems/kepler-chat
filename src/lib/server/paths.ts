@@ -64,6 +64,11 @@ export async function provisionConversationDirectories(
   ]);
 }
 
+/** Throwaway root for capability probes, so no probe session sits above a conversation. */
+export function getProbeRoot(agentId: string): string {
+  return resolve(getSessionsRoot(), ".probe", agentId);
+}
+
 export async function provisionProjectDirectories(projectId: string): Promise<void> {
   await mkdir(resolve(getProjectRoot(projectId), "conversations"), { recursive: true });
 }

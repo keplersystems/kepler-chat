@@ -25,6 +25,16 @@ import { requireAuth } from "$lib/server/auth";
 import { linkMediaIntoConversation, saveToLibrary } from "$lib/server/media";
 import { basename } from "node:path";
 
+/** Agent-facing plumbing materialized into every conversation root. */
+const RUNTIME_ENTRIES = new Set([
+  "input",
+  "scratchpad",
+  "AGENTS.md",
+  "CLAUDE.md",
+  ".opencode",
+  ".claude",
+]);
+
 function getConversationScopePath(
   conversation: ConversationLocator,
   scope: FileScope,
@@ -127,7 +137,7 @@ export const filesRoute = new Elysia({ prefix: "/api/conversations" })
         throw new HttpError(400, "Prefix must point to a directory");
       }
 
-      const files = await listFilesRecursive(workdirPath, startPath, new Set(["input", "scratchpad"]));
+      const files = await listFilesRecursive(workdirPath, startPath, RUNTIME_ENTRIES);
       return { files };
     },
     {

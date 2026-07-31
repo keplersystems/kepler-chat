@@ -1,10 +1,6 @@
-import {
-  SERVER_EVENT_NAMES,
-  type SSEEnvelope,
-  type ServerEventName,
-} from "$lib/contracts";
+import { STREAM_EVENT_NAMES, type SSEEnvelope, type StreamEventName } from "$lib/contracts";
 
-const EVENT_NAMES = new Set<string>(SERVER_EVENT_NAMES);
+const EVENT_NAMES = new Set<string>(STREAM_EVENT_NAMES);
 
 function parseEnvelope(id: string, event: string, dataLines: string[]): SSEEnvelope {
   const dataRaw = dataLines.join("\n");
@@ -15,31 +11,17 @@ function parseEnvelope(id: string, event: string, dataLines: string[]): SSEEnvel
       const message =
         typeof parsed.message === "string" && parsed.message.length > 0
           ? parsed.message
-          : dataRaw || "Unknown SSE event";
+          : dataRaw || "Unknown stream event";
       return { id, event: "error", data: { message } };
     } catch {
-      return {
-        id,
-        event: "error",
-        data: { message: dataRaw || "Unknown SSE event" },
-      };
+      return { id, event: "error", data: { message: dataRaw || "Unknown stream event" } };
     }
   }
 
   try {
-    // Trust boundary: the server forwards OpenCode event properties verbatim,
-    // so the parsed JSON is the payload type for this event name.
-    return {
-      id,
-      event,
-      data: JSON.parse(dataRaw),
-    } as Extract<SSEEnvelope, { event: ServerEventName }>;
+    return { id, event: event as StreamEventName, data: JSON.parse(dataRaw) } as SSEEnvelope;
   } catch {
-    return {
-      id,
-      event: "error",
-      data: { message: `Invalid SSE JSON for event ${event}` },
-    };
+    return { id, event: "error", data: { message: `Invalid SSE JSON for event ${event}` } };
   }
 }
 
@@ -52,17 +34,12 @@ export async function* parseSSEStream(
 
   while (true) {
     const { value, done } = await reader.read();
-    if (done) {
-      break;
-    }
-
+    if (done) break;
     buffer += decoder.decode(value, { stream: true });
 
     while (true) {
       const splitIndex = buffer.indexOf("\n\n");
-      if (splitIndex === -1) {
-        break;
-      }
+      if (splitIndex === -1) break;
 
       const rawMessage = buffer.slice(0, splitIndex);
       buffer = buffer.slice(splitIndex + 2);
@@ -73,23 +50,12 @@ export async function* parseSSEStream(
       const dataLines: string[] = [];
 
       for (const line of lines) {
-        if (line.startsWith("id:")) {
-          id = line.slice(3).trim();
-          continue;
-        }
-        if (line.startsWith("event:")) {
-          event = line.slice(6).trim();
-          continue;
-        }
-        if (line.startsWith("data:")) {
-          dataLines.push(line.slice(5).trimStart());
-        }
+        if (line.startsWith("id:")) id = line.slice(3).trim();
+        else if (line.startsWith("event:")) event = line.slice(6).trim();
+        else if (line.startsWith("data:")) dataLines.push(line.slice(5).trimStart());
       }
 
-      if (!id || dataLines.length === 0) {
-        continue;
-      }
-
+      if (!id || dataLines.length === 0) continue;
       yield parseEnvelope(id, event, dataLines);
     }
   }

@@ -1,7 +1,5 @@
 <script lang="ts">
-  import { onMount } from "svelte";
   import { enhance } from "$app/forms";
-  import { api, apiErrorMessage } from "$lib/api";
   import { Button } from "$lib/components/ui/button";
   import { theme, type Theme } from "$lib/state/theme.svelte";
   import { settings, type MotionPreference } from "$lib/state/settings.svelte";
@@ -20,36 +18,6 @@
     { value: "system", label: "System" },
     { value: "reduced", label: "Reduced" },
   ];
-
-  let autoCompact = $state<boolean | null>(null);
-  let savingCompaction = $state(false);
-  let compactionError = $state<string | null>(null);
-
-  async function loadCompaction() {
-    const { data, error } = await api.api.compaction.get();
-    if (error || !data) {
-      compactionError = apiErrorMessage(error?.value, "Failed to load auto-compact setting");
-      return;
-    }
-    autoCompact = data.auto;
-    compactionError = null;
-  }
-
-  onMount(loadCompaction);
-
-  async function setAutoCompact(value: boolean) {
-    autoCompact = value;
-    // Restarts the OpenCode server; config is only read at spawn.
-    savingCompaction = true;
-    const { error } = await api.api.compaction.put({ auto: value });
-    if (error) {
-      autoCompact = !value;
-      compactionError = apiErrorMessage(error.value, "Failed to save auto-compact setting");
-    } else {
-      compactionError = null;
-    }
-    savingCompaction = false;
-  }
 </script>
 
 <div class="max-w-2xl">
@@ -96,35 +64,6 @@
         {/each}
       </div>
     </div>
-  </div>
-
-  <h2 class="mt-8 font-medium text-foreground">Context</h2>
-  <div class="divide-y divide-border">
-    <div class="flex items-center justify-between gap-4 py-4">
-      <div>
-        <p class="text-sm text-foreground">Auto-compact</p>
-        <p class="mt-0.5 text-sm text-muted-foreground">
-          Summarize older messages automatically when the context window fills.
-        </p>
-      </div>
-      <span class={savingCompaction || autoCompact === null ? "pointer-events-none opacity-60" : ""}>
-        <Toggle
-          checked={autoCompact ?? true}
-          onCheckedChange={setAutoCompact}
-          aria-label="Auto-compact conversations"
-        />
-      </span>
-    </div>
-    {#if compactionError}
-      <p class="flex items-center gap-3 py-3 text-sm text-destructive" role="alert">
-        {compactionError}
-        {#if autoCompact === null}
-          <button type="button" class="font-medium hover:underline" onclick={loadCompaction}>
-            Retry
-          </button>
-        {/if}
-      </p>
-    {/if}
   </div>
 
   <h2 class="mt-8 font-medium text-foreground">Notifications</h2>

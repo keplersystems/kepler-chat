@@ -3,7 +3,7 @@ import { copyFile, link, mkdir, rm, writeFile } from "node:fs/promises";
 import { basename, resolve } from "node:path";
 import { eq } from "drizzle-orm";
 import { db } from "$lib/server/db/client";
-import { media } from "$lib/server/db/schema/opencode";
+import { media } from "$lib/server/db/schema/kepler";
 import { resolveAvailableFilePath } from "$lib/server/files";
 import { HttpError } from "$lib/server/http-error";
 import { generateId } from "$lib/server/ids";

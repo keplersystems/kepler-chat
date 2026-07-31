@@ -4,18 +4,13 @@
   import { Button } from '$lib/components/ui/button';
   import * as DropdownMenu from '$lib/components/ui/dropdown-menu';
   import MediaPickerDialog from './MediaPickerDialog.svelte';
-  import ModelPicker from './ModelPicker.svelte';
-  import * as Select from '$lib/components/ui/select';
-  import type { Provider, ModelSelection, AttachmentModality } from '$lib/types';
-  import type { MediaDTO } from '$lib/contracts';
-  import {
-    buildProviderGroups,
-    fileToModality,
-    findModelOption,
-    getInputModalities,
-  } from './model-options';
+  import SessionConfigMenu from './SessionConfigMenu.svelte';
+  import AgentPicker from './AgentPicker.svelte';
+  import { flattenSelectValues } from '$lib/state/session-config.svelte';
+  import { isModelOption } from "$lib/contracts";
+import { acceptsModality, fileModality, type ModelInfo } from '$lib/contracts';
+  import type { AgentCommand, AgentId, MediaDTO, SessionConfigDTO } from '$lib/contracts';
   import ArrowUpIcon from '@lucide/svelte/icons/arrow-up';
-  import AtomIcon from '@lucide/svelte/icons/atom';
   import ImagesIcon from '@lucide/svelte/icons/images';
   import UploadIcon from '@lucide/svelte/icons/upload';
   import PaperclipIcon from '@lucide/svelte/icons/paperclip';
@@ -24,24 +19,24 @@
   import XIcon from '@lucide/svelte/icons/x';
 
   interface Props {
-    onSubmit: (
-      text: string,
-      model: ModelSelection,
-      files?: File[],
-      mediaIds?: string[],
-      variant?: string,
-    ) => Promise<boolean>;
+    onSubmit: (text: string, files?: File[], mediaIds?: string[]) => Promise<boolean>;
     disabled?: boolean;
     isStreaming?: boolean;
     onStop?: () => void;
     placeholder?: string;
-    providers?: Provider[];
-    connectedProviders?: string[];
-    selectedModel?: ModelSelection | null;
-    onModelChange?: (model: ModelSelection) => void;
+    config?: SessionConfigDTO | null;
+    modelInfo?: Record<string, ModelInfo>;
+    onConfigChange?: (configId: string, value: string) => void;
+    onModeChange?: (modeId: string) => void;
+    /** Rendered only for a new conversation, where the agent is still selectable. */
+    agentId?: AgentId | null;
+    onAgentChange?: (agentId: AgentId) => void;
     text?: string;
-    contextTokens?: number;
-    onCompact?: () => Promise<void>;
+    contextUsed?: number;
+    contextSize?: number;
+    /** Slash commands the agent advertises for this session. */
+    commands?: AgentCommand[];
+    onCommand?: (name: string) => void;
   }
 
   let {
@@ -50,13 +45,17 @@
     isStreaming = false,
     onStop,
     placeholder = 'Message...',
-    providers = [],
-    connectedProviders = [],
-    selectedModel = null,
-    onModelChange,
+    config = null,
+    modelInfo = {},
+    onConfigChange,
+    onModeChange,
+    agentId = null,
+    onAgentChange,
     text = $bindable(''),
-    contextTokens = 0,
-    onCompact,
+    contextUsed = 0,
+    contextSize = 0,
+    commands = [],
+    onCommand,
   }: Props = $props();
 
   const MAX_TEXTAREA_HEIGHT = 240;
@@ -64,73 +63,47 @@
   let files: File[] = $state([]);
   let libraryItems: MediaDTO[] = $state([]);
   let libraryOpen = $state(false);
-  let variant = $state('');
-  let compacting = $state(false);
   let queued = $state<{
     text: string;
     files: File[];
     libraryItems: MediaDTO[];
-    variant: string;
   } | null>(null);
   let textarea: HTMLTextAreaElement | null = $state(null);
   let fileInput: HTMLInputElement | null = $state(null);
   let isDragging = $state(false);
+  let runningCommand = $state<string | null>(null);
 
-  const selectedOption = $derived(
-    findModelOption(buildProviderGroups(providers, connectedProviders), selectedModel),
+  const currentModel = $derived.by(() => {
+    const option = config?.configOptions.find((entry) => isModelOption(entry));
+    return option?.type === "select" ? option.currentValue : null;
+  });
+  const unsupportedModalities = $derived.by(() => {
+    const info = currentModel ? modelInfo[currentModel] : undefined;
+    if (!info) return [];
+    const attached = [
+      ...files.map((file) => fileModality(file.type)),
+      ...libraryItems.map((item) => fileModality(item.mimeType ?? "")),
+    ].filter((modality) => modality !== null);
+    return [...new Set(attached)].filter((modality) => !acceptsModality(info, modality));
+  });
+  // Compaction is the one command with a first-class UI need. claude and codex
+  // advertise it; opencode implements it without advertising it (verified), so
+  // it is offered for every agent and a genuine failure surfaces as an error.
+  const commandEntries = $derived(
+    commands.some((command) => command.name === "compact")
+      ? commands
+      : [{ name: "compact", description: "Summarise the conversation to free up context" }, ...commands],
   );
-
-  const variantOptions = $derived(Object.keys(selectedOption?.model.variants ?? {}));
-
-  const contextLimit = $derived(selectedOption?.model.limit.context ?? 0);
   const contextPct = $derived(
-    contextLimit > 0 && contextTokens > 0
-      ? Math.min(100, Math.round((contextTokens / contextLimit) * 100))
+    contextSize > 0 && contextUsed > 0
+      ? Math.min(100, Math.round((contextUsed / contextSize) * 100))
       : 0,
   );
-
-  const compatibilityWarning = $derived.by(() => {
-    if (!selectedOption || files.length === 0) return null;
-    const model = selectedOption.model;
-
-    const supported = getInputModalities(model);
-    const explicitlyNoAttachment = model.capabilities.attachment === false;
-
-    const unsupportedFiles = files
-      .map((file) => ({ file, modality: fileToModality(file) }))
-      .filter(
-        (entry): entry is { file: File; modality: AttachmentModality } =>
-          entry.modality !== null,
-      )
-      .filter((entry) => explicitlyNoAttachment || !supported.has(entry.modality));
-
-    if (unsupportedFiles.length === 0) return null;
-
-    return {
-      unsupportedModalities: Array.from(
-        new Set(unsupportedFiles.map((e) => e.modality)),
-      ),
-    };
-  });
 
   /** Exposed so the page's error banner can re-fire the restored draft. */
   export function requestSubmit() {
     void submit();
   }
-
-  async function compact() {
-    if (!onCompact || compacting) return;
-    compacting = true;
-    try {
-      await onCompact();
-    } finally {
-      compacting = false;
-    }
-  }
-
-  $effect(() => {
-    if (variant && !variantOptions.includes(variant)) variant = '';
-  });
 
   function handleKeydown(event: KeyboardEvent) {
     if (event.key === 'Enter' && !event.shiftKey) {
@@ -146,34 +119,30 @@
     files = [...files, ...pasted];
   }
 
-  function setDraft(draft: { text: string; files: File[]; libraryItems: MediaDTO[]; variant: string }) {
+  function setDraft(draft: { text: string; files: File[]; libraryItems: MediaDTO[] }) {
     text = draft.text;
     files = draft.files;
     libraryItems = draft.libraryItems;
-    variant = draft.variant;
     adjustHeight();
   }
 
   async function submit() {
     if (!text.trim() && files.length === 0 && libraryItems.length === 0) return;
-    if (!selectedModel) return;
     if (isStreaming) {
-      queued = { text: text.trim(), files, libraryItems, variant };
-      setDraft({ text: '', files: [], libraryItems: [], variant });
+      queued = { text: text.trim(), files, libraryItems };
+      setDraft({ text: '', files: [], libraryItems: [] });
       return;
     }
 
     // Clear immediately so the composer is ready while the reply streams;
     // restore the draft if the send fails.
-    const sent = { text: text.trim(), files, libraryItems, variant };
-    setDraft({ text: '', files: [], libraryItems: [], variant });
+    const sent = { text: text.trim(), files, libraryItems };
+    setDraft({ text: '', files: [], libraryItems: [] });
 
     const succeeded = await onSubmit(
       sent.text,
-      selectedModel,
       sent.files.length > 0 ? sent.files : undefined,
       sent.libraryItems.length > 0 ? sent.libraryItems.map((m) => m.id) : undefined,
-      sent.variant || undefined,
     );
     if (!succeeded) {
       setDraft(sent);
@@ -213,6 +182,11 @@
     isDragging = false;
   }
 
+  function runCommand(name: string) {
+    runningCommand = name;
+    onCommand?.(name);
+  }
+
   function dequeue() {
     const next = queued;
     queued = null;
@@ -220,7 +194,9 @@
   }
 
   $effect(() => {
-    if (isStreaming || !queued) return;
+    if (isStreaming) return;
+    runningCommand = null;
+    if (!queued) return;
     dequeue();
     void submit();
   });
@@ -263,13 +239,15 @@
       </div>
     {/if}
 
-    {#if compatibilityWarning}
+    {#if unsupportedModalities.length > 0}
       <div
         class="mx-3 mt-3 rounded-lg border border-primary/30 bg-primary/10 px-3 py-2 text-xs"
         transition:slide={{ duration: 240, easing: cubicOut }}
+        role="status"
       >
-        Selected model may not natively support: {compatibilityWarning.unsupportedModalities.join(', ')}.
-        Tools may still handle these files.
+        {currentModel && modelInfo[currentModel]?.name} may not accept
+        {unsupportedModalities.join(", ")} input. Tools can still read these files from the
+        workspace.
       </div>
     {/if}
 
@@ -289,7 +267,7 @@
       onpaste={handlePaste}
       oninput={adjustHeight}
       {placeholder}
-      disabled={disabled || !selectedModel}
+      {disabled}
       rows="1"
       class="block w-full resize-none border-0 bg-transparent px-5 pb-2 pt-4 text-[15px] placeholder:text-muted-foreground focus-visible:outline-none disabled:cursor-not-allowed disabled:opacity-50"
       style="min-height: 64px; max-height: {MAX_TEXTAREA_HEIGHT}px;"
@@ -328,72 +306,74 @@
       </DropdownMenu.Root>
 
       <div class="flex min-w-0 items-center gap-1.5">
-        {#if compacting}
-          <span class="t-shimmer shrink-0 font-mono text-[10px]" data-text="compacting…">
-            compacting…
+        {#if runningCommand}
+          <span class="t-shimmer shrink-0 font-mono text-[10px]" data-text="/{runningCommand}…">
+            /{runningCommand}…
           </span>
-        {:else if contextPct > 0}
-          {#if onCompact}
-            <DropdownMenu.Root>
-              <DropdownMenu.Trigger
-                class="shrink-0 rounded-md px-1 py-0.5 font-mono text-[10px] tabular-nums {contextPct >= 85
-                  ? 'text-destructive'
-                  : 'text-muted-foreground/70'} hover:bg-accent hover:text-foreground"
-                aria-label="Context usage"
-              >
-                {contextPct}% ctx
-              </DropdownMenu.Trigger>
-              <DropdownMenu.Content align="end" class="min-w-[13rem]">
+        {:else if commands.length > 0}
+          <DropdownMenu.Root>
+            <DropdownMenu.Trigger
+              class="shrink-0 rounded-md px-1 py-0.5 font-mono text-[10px] tabular-nums {contextPct >= 85
+                ? 'text-destructive'
+                : 'text-muted-foreground/70'} hover:bg-accent hover:text-foreground"
+              aria-label="Context usage and agent commands"
+            >
+              {contextPct > 0 ? `${contextPct}% ctx` : "/"}
+            </DropdownMenu.Trigger>
+            <DropdownMenu.Content align="end" class="max-h-[20rem] w-[19rem] overflow-y-auto">
+              {#if contextPct > 0}
                 <p class="px-2.5 py-1.5 font-mono text-xs tabular-nums text-muted-foreground">
-                  ~{contextTokens.toLocaleString()} / {contextLimit.toLocaleString()} tokens
+                  ~{contextUsed.toLocaleString()} / {contextSize.toLocaleString()} tokens
                 </p>
                 <DropdownMenu.Separator />
-                <DropdownMenu.Item disabled={isStreaming} onSelect={compact}>
-                  Compact conversation
+              {/if}
+              {#each commandEntries as command (command.name)}
+                <DropdownMenu.Item
+                  class="min-w-0"
+                  disabled={isStreaming}
+                  onSelect={() => runCommand(command.name)}
+                >
+                  <span class="flex min-w-0 flex-col">
+                    <span class="truncate font-mono text-xs">
+                      /{command.name}{command.hint ? ` ${command.hint}` : ""}
+                    </span>
+                    {#if command.description}
+                      <span class="truncate text-[11px] text-muted-foreground">
+                        {command.description}
+                      </span>
+                    {/if}
+                  </span>
                 </DropdownMenu.Item>
-              </DropdownMenu.Content>
-            </DropdownMenu.Root>
-          {:else}
-            <span
-              class="shrink-0 font-mono text-[10px] tabular-nums {contextPct >= 85
-                ? 'text-destructive'
-                : 'text-muted-foreground/70'}"
-              title={`Context used: ~${contextTokens.toLocaleString()} of ${contextLimit.toLocaleString()} tokens`}
-            >
-              {contextPct}% ctx
-            </span>
-          {/if}
-        {/if}
-        {#if variantOptions.length > 0}
-          <Select.Root type="single" bind:value={variant}>
-            <Select.Trigger
-              class="h-8 w-fit border-0 bg-transparent px-2 text-xs text-muted-foreground shadow-none hover:bg-accent hover:text-foreground"
-              aria-label="Reasoning effort"
-            >
-              <AtomIcon size={13} class="opacity-70" />
-              <span class="capitalize">{variant || "default"}</span>
-            </Select.Trigger>
-            <Select.Content class="min-w-[8rem]">
-              <Select.Item value="" label="default">
-                <span class="flex-1 capitalize">default</span>
-              </Select.Item>
-              {#each variantOptions as option (option)}
-                <Select.Item value={option} label={option}>
-                  <span class="flex-1 capitalize">{option}</span>
-                </Select.Item>
               {/each}
-            </Select.Content>
-          </Select.Root>
+            </DropdownMenu.Content>
+          </DropdownMenu.Root>
+        {:else if contextPct > 0}
+          <span
+            class="shrink-0 font-mono text-[10px] tabular-nums {contextPct >= 85
+              ? 'text-destructive'
+              : 'text-muted-foreground/70'}"
+            title={`Context used: ~${contextUsed.toLocaleString()} of ${contextSize.toLocaleString()} tokens`}
+          >
+            {contextPct}% ctx
+          </span>
         {/if}
 
-        <ModelPicker {providers} {connectedProviders} {selectedModel} {onModelChange} {disabled} />
+        {#if onAgentChange}
+          <AgentPicker value={agentId} onChange={onAgentChange} {disabled} />
+        {/if}
+
+        <SessionConfigMenu
+          {config}
+          {modelInfo}
+          {disabled}
+          onConfigChange={(configId, value) => onConfigChange?.(configId, value)}
+          onModeChange={(modeId) => onModeChange?.(modeId)}
+        />
 
         <Button
           onclick={() => (isStreaming && onStop ? onStop() : submit())}
           disabled={!isStreaming &&
-            (disabled ||
-              !selectedModel ||
-              (!text.trim() && files.length === 0 && libraryItems.length === 0))}
+            (disabled || (!text.trim() && files.length === 0 && libraryItems.length === 0))}
           size="icon"
           class="h-9 w-9 shrink-0 rounded-xl"
           aria-label={isStreaming && onStop ? "Stop generating" : "Send message"}

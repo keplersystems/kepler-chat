@@ -5,6 +5,7 @@
 
   type Props = ComponentProps<typeof SelectPrimitive.Content> & {
     header?: Snippet;
+    footer?: Snippet;
     viewportClass?: string;
   };
 
@@ -13,6 +14,7 @@
     sideOffset = 6,
     children,
     header,
+    footer,
     viewportClass,
     ...rest
   }: Props = $props();
@@ -29,8 +31,9 @@
     )}
   >
     {@render header?.()}
-    <SelectPrimitive.Viewport class={cn("flex-1 overflow-y-auto p-1", viewportClass)}>
+    <SelectPrimitive.Viewport class={cn("min-h-0 flex-1 overflow-y-auto p-1", viewportClass)}>
       {@render children?.()}
     </SelectPrimitive.Viewport>
+    {@render footer?.()}
   </SelectPrimitive.Content>
 </SelectPrimitive.Portal>

@@ -4,12 +4,11 @@ import { requireAuth } from "$lib/server/auth";
 import {
   createProject,
   deleteProject,
-  getProjectInstructions,
   listProjects,
   renameProject,
   requireProject,
-  setProjectInstructions,
 } from "$lib/server/projects";
+import { readProjectInstructions, writeProjectInstructions } from "$lib/server/runtime";
 
 export const projectsRoute = new Elysia({ prefix: "/api/projects" })
   .get(
@@ -37,7 +36,7 @@ export const projectsRoute = new Elysia({ prefix: "/api/projects" })
       detail: {
         summary: "Create project",
         tags: ["Projects"],
-        description: "Create a project with its own directory for instructions, config, and skills",
+        description: "Create a project with its own directory for instructions and skills",
       },
     },
   )
@@ -46,7 +45,7 @@ export const projectsRoute = new Elysia({ prefix: "/api/projects" })
     async (context) => {
       requireAuth(context);
       const row = await requireProject(context.params.id);
-      const instructions = await getProjectInstructions(context.params.id);
+      const instructions = await readProjectInstructions(context.params.id);
       return { ...row, instructions };
     },
     {
@@ -54,7 +53,7 @@ export const projectsRoute = new Elysia({ prefix: "/api/projects" })
       detail: {
         summary: "Get project",
         tags: ["Projects"],
-        description: "Get a project with its instructions (AGENTS.md)",
+        description: "Get a project with its instructions",
       },
     },
   )
@@ -79,7 +78,7 @@ export const projectsRoute = new Elysia({ prefix: "/api/projects" })
     async (context) => {
       requireAuth(context);
       await requireProject(context.params.id);
-      await setProjectInstructions(context.params.id, context.body.content);
+      await writeProjectInstructions(context.params.id, context.body.content);
       return { success: true as const };
     },
     {
@@ -89,7 +88,7 @@ export const projectsRoute = new Elysia({ prefix: "/api/projects" })
         summary: "Set project instructions",
         tags: ["Projects"],
         description:
-          "Write the project's AGENTS.md; applies to every conversation in the project",
+          "Write the project's instructions; applies to every conversation in the project",
       },
     },
   )

@@ -1,7 +1,7 @@
 /**
  * Curated remote MCP connector presets. Adding one writes a `type: "remote"`
- * MCP server named `preset.name`; OAuth tokens are stored by OpenCode keyed by
- * that name, so preset names are stable identifiers.
+ * MCP server named `preset.name`; services that need auth take a request
+ * header (e.g. Authorization) on that server config.
  */
 export interface ConnectorPreset {
   name: string;

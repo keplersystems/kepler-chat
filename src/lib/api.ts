@@ -1,7 +1,6 @@
 import { treaty } from "@elysiajs/eden";
 import { browser } from "$app/environment";
 import type { App } from "$lib/server/app";
-import type { FileScope } from "$lib/contracts";
 
 export const api = treaty<App>(browser ? window.location.origin : "http://localhost");
 
@@ -19,12 +18,20 @@ export function apiErrorMessage(value: unknown, fallback: string): string {
   return fallback;
 }
 
-export function downloadFileUrl(
-  conversationId: string,
-  path: string,
-  scope: FileScope = "output",
-): string {
-  const encodedConversationId = encodeURIComponent(conversationId);
-  const encodedPath = path.split("/").map(encodeURIComponent).join("/");
-  return `/api/conversations/${encodedConversationId}/files/${encodedPath}?scope=${encodeURIComponent(scope)}`;
+interface TreatyResponse<T> {
+  data: T | null;
+  error: { value: unknown } | null;
+}
+
+/**
+ * Unwrap an Eden call into `data` or a display message. Stores share this so
+ * error handling cannot drift between them.
+ */
+export async function request<T>(
+  call: Promise<TreatyResponse<T>>,
+  fallback: string,
+): Promise<{ data: T; error: null } | { data: null; error: string }> {
+  const { data, error } = await call;
+  if (error || !data) return { data: null, error: apiErrorMessage(error?.value, fallback) };
+  return { data, error: null };
 }

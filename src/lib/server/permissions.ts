@@ -1,8 +1,8 @@
 import { readFile, writeFile } from "node:fs/promises";
 import { resolve } from "node:path";
 import type { PermissionSettings } from "$lib/contracts";
-import { isEnoent } from "$lib/server/files";
 import { getSessionsRoot } from "$lib/server/paths";
+import { isEnoent } from "$lib/server/files";
 
 export const PERMISSION_DEFAULTS: PermissionSettings = {
   bash: "allow",
@@ -13,20 +13,20 @@ export const PERMISSION_DEFAULTS: PermissionSettings = {
   external_directory: "deny",
 };
 
-function permissionsPath(): string {
+function settingsPath(): string {
   return resolve(getSessionsRoot(), "permissions.json");
 }
 
 export async function readPermissionSettings(): Promise<PermissionSettings> {
-  const raw = await readFile(permissionsPath(), "utf8").catch((err) => {
-    if (isEnoent(err)) return null;
-    throw err;
-  });
-  if (!raw) return { ...PERMISSION_DEFAULTS };
-  const stored = JSON.parse(raw) as Partial<PermissionSettings>;
-  return { ...PERMISSION_DEFAULTS, ...stored };
+  try {
+    const raw = await readFile(settingsPath(), "utf8");
+    return { ...PERMISSION_DEFAULTS, ...(JSON.parse(raw) as Partial<PermissionSettings>) };
+  } catch (error) {
+    if (isEnoent(error)) return { ...PERMISSION_DEFAULTS };
+    throw error;
+  }
 }
 
 export async function writePermissionSettings(settings: PermissionSettings): Promise<void> {
-  await writeFile(permissionsPath(), JSON.stringify(settings, null, 2) + "\n", "utf8");
+  await writeFile(settingsPath(), JSON.stringify(settings, null, 2) + "\n");
 }

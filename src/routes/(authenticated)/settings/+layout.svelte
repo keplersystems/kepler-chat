@@ -9,7 +9,7 @@
   title="Settings"
   sections={[
     { label: "General", href: "/settings/general" },
-    { label: "Providers", href: "/settings/providers" },
+    { label: "Agents", href: "/settings/agents" },
     { label: "Instructions", href: "/settings/instructions" },
     { label: "Usage", href: "/settings/usage" },
   ]}

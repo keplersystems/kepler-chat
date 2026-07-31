@@ -1,8 +1,7 @@
 import { Elysia, t } from "elysia";
 import type { MessageSearchResult } from "$lib/contracts";
-import { db } from "$lib/server/db/client";
 import { requireAuth } from "$lib/server/auth";
-import { searchMessageText } from "$lib/server/opencode-db";
+import { searchMessageText } from "$lib/server/search";
 
 function snippet(text: string, query: string, radius = 70): string {
   const index = text.toLowerCase().indexOf(query.toLowerCase());
@@ -19,23 +18,16 @@ export const searchRoute = new Elysia({ prefix: "/api/search" }).get(
     const query = context.query.q.trim();
     if (query.length < 2) return { results: [] };
 
-    const [matches, conversations] = await Promise.all([
-      searchMessageText(query),
-      db.query.conversation.findMany(),
-    ]);
-    const bySession = new Map(conversations.map((c) => [c.opencode_session_id, c]));
-
+    const matches = await searchMessageText(query);
     const seen = new Set<string>();
     const results: MessageSearchResult[] = [];
     for (const match of matches) {
-      const conversation = bySession.get(match.sessionID);
-      if (!conversation) continue;
-      const key = `${conversation.id}:${match.messageID}`;
+      const key = `${match.conversationId}:${match.time}`;
       if (seen.has(key)) continue;
       seen.add(key);
       results.push({
-        conversationId: conversation.id,
-        title: conversation.title,
+        conversationId: match.conversationId,
+        title: match.title,
         role: match.role,
         snippet: snippet(match.text, query),
         time: match.time,

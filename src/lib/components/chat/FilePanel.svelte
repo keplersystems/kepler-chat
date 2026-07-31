@@ -4,7 +4,7 @@
   import ArtifactViewer from './ArtifactViewer.svelte';
   import * as Dialog from '$lib/components/ui/dialog';
   import * as DropdownMenu from '$lib/components/ui/dropdown-menu';
-  import { downloadFileUrl } from '$lib/api';
+  import { downloadFileUrl } from '$lib/contracts';
   import { formatSize } from '$lib/utils';
   import type { Component } from 'svelte';
   import DownloadIcon from '@lucide/svelte/icons/download';

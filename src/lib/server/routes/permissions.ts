@@ -1,11 +1,11 @@
 import { Elysia, t } from "elysia";
 import { PERMISSION_TOOLS, type PermissionTool } from "$lib/contracts";
 import { requireAuth } from "$lib/server/auth";
+import { stopAllAgents } from "$lib/server/acp/engine";
 import {
   readPermissionSettings,
   writePermissionSettings,
 } from "$lib/server/permissions";
-import { opencodeServer } from "$lib/server/opencode/supervisor";
 
 const action = t.Union([t.Literal("allow"), t.Literal("ask"), t.Literal("deny")]);
 
@@ -27,7 +27,7 @@ export const permissionsRoute = new Elysia({ prefix: "/api/permissions" })
       detail: {
         summary: "Get tool permissions",
         tags: ["Settings"],
-        description: "Global tool permission baseline applied to the OpenCode server",
+        description: "Global tool permission baseline",
       },
     },
   )
@@ -37,7 +37,7 @@ export const permissionsRoute = new Elysia({ prefix: "/api/permissions" })
       requireAuth(context);
       await writePermissionSettings(context.body.permissions);
       // Permissions ride on OPENCODE_PERMISSION, which is read at spawn.
-      await opencodeServer.restart();
+      await stopAllAgents();
       return { success: true };
     },
     {
@@ -47,7 +47,7 @@ export const permissionsRoute = new Elysia({ prefix: "/api/permissions" })
       detail: {
         summary: "Update tool permissions",
         tags: ["Settings"],
-        description: "Persist the permission baseline and restart the OpenCode server",
+        description: "Persist the permission baseline and restart the OpenCode agent",
       },
     },
   );

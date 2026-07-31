@@ -2,30 +2,34 @@
   import { untrack } from "svelte";
   import { slide } from "svelte/transition";
   import { cubicOut } from "svelte/easing";
-  import type { Message, Part } from "@opencode-ai/sdk/v2";
-  import type {
+  import { isModelOption } from "$lib/contracts";
+import type {
+    AgentId,
     ConversationDTO,
+    ElicitationReply,
     FileEntryDTO,
+    MessageView,
     PendingRequestDTO,
     ProjectDTO,
   } from "$lib/contracts";
   import { browser } from "$app/environment";
-  import { goto, invalidateAll } from "$app/navigation";
+  import { goto } from "$app/navigation";
   import { api } from "$lib/api";
   import { chat } from "$lib/state/chat.svelte";
   import { uploadAttachments } from "$lib/state/attachments";
+  import { toMessageViewList } from "$lib/messages";
   import {
-    fileAttachmentInput,
-    messageText,
-    toMessageViewList,
-    type MessageView,
-  } from "$lib/messages";
-  import { modelCatalog } from "$lib/state/providers.svelte";
-  import type { ModelSelection } from "$lib/types";
+    flattenSelectValues,
+    sessionConfig,
+    type LoadedSessionConfig,
+  } from "$lib/state/session-config.svelte";
+  import { modelPrefs } from "$lib/state/model-prefs.svelte";
+  import * as Tooltip from "$lib/components/ui/tooltip";
+  import GitBranchIcon from "@lucide/svelte/icons/git-branch";
   import MessageList from "$lib/components/chat/MessageList.svelte";
   import MessageInput from "$lib/components/chat/MessageInput.svelte";
   import RequestDialog from "$lib/components/chat/RequestDialog.svelte";
-  import TodoRail from "$lib/components/chat/TodoRail.svelte";
+  import PlanRail from "$lib/components/chat/PlanRail.svelte";
   import OutputFilesSidebar from "$lib/components/chat/OutputFilesSidebar.svelte";
 
   interface Props {
@@ -33,9 +37,8 @@
       conversations: ConversationDTO[];
       projects: ProjectDTO[];
       conversation: ConversationDTO;
-      messages: Array<{ info: Message; parts: Part[] }>;
+      messages: MessageView[];
       requests: PendingRequestDTO[];
-      selectedModel: ModelSelection | null;
     };
   }
 
@@ -43,14 +46,15 @@
   const FILE_PANEL_STORAGE_PREFIX = "kepler:chat:files-panel-collapsed:";
 
   let composer = $state<MessageInput | null>(null);
-  let selectedModelOverride = $state<ModelSelection | null>(null);
   let outputFiles = $state<FileEntryDTO[]>([]);
   let isFilesPanelCollapsed = $state(false);
   let liveTitle = $state<string | null>(null);
 
   const conversationId = $derived(data.conversation.id);
   const headerTitle = $derived(liveTitle ?? data.conversation.title);
-  const selectedModel = $derived(selectedModelOverride ?? data.selectedModel);
+  const config = $derived(chat.configFor(conversationId));
+  const usage = $derived(chat.usageFor(conversationId));
+  const commands = $derived(chat.commandsFor(conversationId));
 
   const persistedMessages = $derived(toMessageViewList(data.messages));
   // Streaming copies win over persisted ones so a reattached stream updates
@@ -64,10 +68,7 @@
       ...streaming.filter((m) => !persistedIds.has(m.id)),
     ];
   });
-  const currentRequest = $derived(data.requests[0] ?? chat.pendingRequests[0] ?? null);
-  const contextTokens = $derived(
-    visibleMessages.findLast((m) => m.role === "assistant" && m.tokens?.total)?.tokens?.total ?? 0,
-  );
+  const currentRequest = $derived(chat.pendingRequests[0] ?? data.requests[0] ?? null);
 
   $effect(() => {
     chat.setPendingRequests(data.requests);
@@ -75,7 +76,6 @@
 
   $effect(() => {
     void conversationId;
-    selectedModelOverride = null;
     liveTitle = null;
   });
 
@@ -94,11 +94,10 @@
   });
 
   $effect(() => {
-    void conversationId;
+    const id = conversationId;
+    const agentId = data.conversation.agent_id;
     loadFiles();
-    modelCatalog.loadDefault().then((model) => {
-      if (!selectedModel) selectedModelOverride = model;
-    });
+    void loadSession(id, agentId);
   });
 
   // Pick up a generation started before this page loaded (reload, other tab).
@@ -108,6 +107,28 @@
       void chat.attach(id, (title) => (liveTitle = title));
     }
   });
+
+  // Commands are pushed by the agent right after the session is established,
+  // which the config load does, so they are only readable afterwards.
+  async function loadSession(id: string, agentId: AgentId) {
+    const loaded = await sessionConfig.load(id);
+    await chat.loadCommands(id);
+    if (loaded) applyRememberedModel(id, agentId, loaded);
+  }
+
+  /**
+   * A conversation with no stored model runs on the agent's default; start it on
+   * the model this agent was last used with instead.
+   */
+  function applyRememberedModel(id: string, agentId: AgentId, loaded: LoadedSessionConfig) {
+    if (loaded.modelValue) return;
+    const remembered = modelPrefs.lastModelFor(agentId);
+    if (!remembered) return;
+    const option = loaded.config?.configOptions.find(isModelOption);
+    if (option?.type !== "select" || option.currentValue === remembered) return;
+    if (!flattenSelectValues(option).some((value) => value.id === remembered)) return;
+    void sessionConfig.setOption(id, "model", remembered);
+  }
 
   async function loadFiles() {
     const { data: response, error } = await api.api
@@ -120,16 +141,15 @@
     }
   }
 
-  async function handleModelChange(model: ModelSelection) {
-    selectedModelOverride = model;
-    modelCatalog.remember(model);
-    await api.api.conversations({ id: conversationId }).model.put(model);
+  function handleConfigChange(configId: string, value: string) {
+    if (configId === "model") modelPrefs.rememberModel(data.conversation.agent_id, value);
+    void sessionConfig.setOption(conversationId, configId, value);
   }
 
-  async function handleBranch(message: MessageView) {
+  async function handleBranch() {
     const { data: created, error } = await api.api
       .conversations({ id: conversationId })
-      .branch.post({ messageID: message.id });
+      .branch.post();
     if (error || !created || "error" in created) {
       chat.setError("Failed to branch conversation");
       return;
@@ -137,68 +157,7 @@
     await goto(`/chat/${created.id}`);
   }
 
-  async function handleEdit(message: MessageView, text: string) {
-    if (!selectedModel || chat.isStreamingFor(conversationId)) return;
-    chat.setError(null);
-    const { error } = await api.api
-      .conversations({ id: conversationId })
-      .revert.post({ messageID: message.id });
-    if (error) {
-      chat.setError("Failed to edit message");
-      return;
-    }
-    await invalidateAll();
-    const attachments = message.parts
-      .filter((part) => part.type === "file")
-      .map(fileAttachmentInput)
-      .filter((a) => a !== null);
-    await chat.send(
-      conversationId,
-      { text, model: selectedModel, attachments },
-      (title) => (liveTitle = title),
-    );
-  }
-
-  async function handleCompact() {
-    if (chat.isStreamingFor(conversationId)) return;
-    chat.setError(null);
-    const { error } = await api.api.conversations({ id: conversationId }).compact.post();
-    if (error) {
-      chat.setError("Failed to compact conversation");
-      return;
-    }
-    await invalidateAll();
-  }
-
-  function handleRegenerate(message: MessageView) {
-    const index = visibleMessages.findIndex((m) => m.id === message.id);
-    const previousUser = visibleMessages
-      .slice(0, index)
-      .reverse()
-      .find((m) => m.role === "user");
-    if (!previousUser) return;
-    void handleEdit(previousUser, messageText(previousUser));
-  }
-
-  async function handleDeleteMessage(message: MessageView) {
-    const { error } = await api.api
-      .conversations({ id: conversationId })
-      .messages({ messageID: message.id })
-      .delete();
-    if (error) {
-      chat.setError("Failed to delete message");
-      return;
-    }
-    await invalidateAll();
-  }
-
-  async function handleSendMessage(
-    text: string,
-    model: ModelSelection,
-    files?: File[],
-    mediaIds?: string[],
-    variant?: string,
-  ) {
+  async function handleSendMessage(text: string, files?: File[], mediaIds?: string[]) {
     if (!text.trim() && (!files || files.length === 0) && (!mediaIds || mediaIds.length === 0))
       return false;
     chat.setError(null);
@@ -208,7 +167,7 @@
 
     const succeeded = await chat.send(
       conversationId,
-      { text, model, attachments, variant },
+      { text, attachments },
       (title) => (liveTitle = title),
     );
     if (succeeded) {
@@ -216,27 +175,68 @@
     }
     return succeeded;
   }
+
+  async function handleCommand(name: string) {
+    chat.setError(null);
+    const succeeded = await chat.runCommand(
+      conversationId,
+      name,
+      undefined,
+      (title) => (liveTitle = title),
+    );
+    if (succeeded) await loadFiles();
+  }
+
+  function handlePermissionReply(requestId: string, optionId: string) {
+    chat.removePendingRequest(requestId);
+    void api.api
+      .conversations({ id: conversationId })
+      .requests({ requestId })
+      .permission.post({ optionId });
+  }
+
+  function handleElicitationReply(
+    requestId: string,
+    action: ElicitationReply["action"],
+    content?: Record<string, unknown>,
+  ) {
+    chat.removePendingRequest(requestId);
+    void api.api
+      .conversations({ id: conversationId })
+      .requests({ requestId })
+      .elicitation.post({ action, content });
+  }
 </script>
 
 <div class="flex h-full">
   <div class="flex min-w-0 flex-1 flex-col">
     <header class="flex h-12 shrink-0 items-center px-4 max-md:pl-14">
       {#key headerTitle}
-        <h1 class="t-rise truncate text-sm font-medium text-foreground/90">{headerTitle}</h1>
+        <h1 class="t-rise min-w-0 flex-1 truncate text-sm font-medium text-foreground/90">
+          {headerTitle}
+        </h1>
       {/key}
+      {#if config?.capabilities.fork}
+        <Tooltip.Root>
+          <Tooltip.Trigger
+            onclick={handleBranch}
+            class="rounded-md p-1.5 text-muted-foreground hover:bg-accent hover:text-foreground"
+            aria-label="Branch conversation"
+          >
+            <GitBranchIcon size={15} />
+          </Tooltip.Trigger>
+          <Tooltip.Content side="bottom">Branch conversation</Tooltip.Content>
+        </Tooltip.Root>
+      {/if}
     </header>
 
     {#if chat.isStreamingFor(conversationId)}
-      <TodoRail todos={chat.todosFor(conversationId)} />
+      <PlanRail entries={chat.planFor(conversationId)} />
     {/if}
 
     <MessageList
       messages={visibleMessages}
       isStreaming={chat.isStreamingFor(conversationId)}
-      onBranch={handleBranch}
-      onDelete={handleDeleteMessage}
-      onEdit={handleEdit}
-      onRegenerate={handleRegenerate}
     />
 
     {#if chat.lastError}
@@ -264,17 +264,18 @@
       <div class="mx-auto w-full max-w-[52rem]">
         <MessageInput
           bind:this={composer}
-          {contextTokens}
-          onCompact={handleCompact}
+          {config}
+          modelInfo={sessionConfig.modelInfo}
+          contextUsed={usage?.used ?? 0}
+          contextSize={usage?.size ?? 0}
+          onConfigChange={handleConfigChange}
+          onModeChange={(modeId) => void sessionConfig.setMode(conversationId, modeId)}
+          {commands}
+          onCommand={handleCommand}
           onSubmit={handleSendMessage}
-          disabled={modelCatalog.loading}
           isStreaming={chat.isStreamingFor(conversationId)}
           onStop={() => chat.stop(conversationId)}
           placeholder="Reply…"
-          providers={modelCatalog.providers}
-          connectedProviders={modelCatalog.connected}
-          {selectedModel}
-          onModelChange={handleModelChange}
         />
       </div>
     </div>
@@ -290,4 +291,8 @@
   {/if}
 </div>
 
-<RequestDialog request={currentRequest} />
+<RequestDialog
+  request={currentRequest}
+  onPermission={handlePermissionReply}
+  onElicitation={handleElicitationReply}
+/>

@@ -1,7 +1,6 @@
 <script lang="ts">
   import { api, apiErrorMessage } from "$lib/api";
-  import type { McpServerConfig, McpServerEntry } from "$lib/server/mcp";
-  import type { McpRemoteConfig } from "@opencode-ai/sdk/v2";
+  import type { McpServerConfig, McpServerEntry } from "$lib/contracts";
   import {
     ConfirmDeleteDialog,
     ManagerFormDialog,
@@ -13,7 +12,6 @@
   import { IconButton } from "$lib/components/ui/icon-button";
   import { Input } from "$lib/components/ui/input";
   import { Toggle } from "$lib/components/ui/toggle";
-  import ChevronDownIcon from "@lucide/svelte/icons/chevron-down";
   import PencilIcon from "@lucide/svelte/icons/pencil";
   import PlusIcon from "@lucide/svelte/icons/plus";
   import Trash2Icon from "@lucide/svelte/icons/trash-2";
@@ -32,15 +30,13 @@
   const labelClass = "text-sm font-medium";
   const hintClass = "text-xs text-muted-foreground";
 
-  let expandedError = $state<string | null>(null);
-  let editingBase = $state<McpServerConfig | null>(null);
   let form = $state(emptyForm());
 
   const manager = createManagerState<McpServerEntry>({
     async list() {
       const { data, error } = await api.api.mcp.get({ query: scopeQuery() });
       if (error) throw new Error(apiErrorMessage(error.value, "Failed to load MCP servers"));
-      return data.servers as McpServerEntry[];
+      return data.servers;
     },
     async remove(entry) {
       const { error } = await api.api
@@ -69,9 +65,10 @@
       command: "",
       env: [] as { key: string; value: string }[],
       url: "",
-      clientId: "",
-      clientSecret: "",
-      scope: "",
+      headers: [] as { key: string; value: string }[],
+      // Carried through edits: a full-document upsert would otherwise re-enable
+      // a server the user had disabled.
+      enabled: true,
     };
   }
 
@@ -84,51 +81,32 @@
   }
 
   function entryKey(entry: McpServerEntry): string {
-    return `${entry.scope.kind}:${entry.name}`;
+    return `${entry.scope}:${entry.name}`;
   }
 
   function canEdit(entry: McpServerEntry): boolean {
-    return !projectId || entry.scope.kind === "project";
-  }
-
-  /** `oauth.redirectUri` is server-managed and rejected by the API schema. */
-  function sanitize(config: McpServerConfig): McpServerConfig {
-    if (config.type !== "remote" || typeof config.oauth !== "object" || config.oauth === null) {
-      return config;
-    }
-    const { redirectUri: _, ...oauth } = config.oauth;
-    return { ...config, oauth };
+    return !projectId || entry.scope === "project";
   }
 
   async function toggleEnabled(entry: McpServerEntry) {
-    const config = sanitize({ ...entry.config, enabled: !(entry.config.enabled ?? true) });
+    const config = { ...entry.config, enabled: !(entry.config.enabled ?? true) };
     const { error } = await api.api.mcp({ name: entry.name }).put({ ...scopeBody(), config });
     listActionError = error ? apiErrorMessage(error.value, "Failed to update server") : null;
     await manager.load();
   }
 
-  async function startAuth(entry: McpServerEntry) {
-    const { data, error } = await api.api.mcp({ name: entry.name }).auth.post(scopeBody());
-    if (error || !data) {
-      listActionError = apiErrorMessage(error?.value, "Failed to start authentication");
-      return;
-    }
-    window.location.href = data.authorizationUrl;
-  }
-
   function openCreate() {
     form = emptyForm();
-    editingBase = null;
     manager.openDialog(false);
   }
 
   function openEdit(entry: McpServerEntry) {
     const config = entry.config;
-    const oauth = config.type === "remote" && typeof config.oauth === "object" ? config.oauth : null;
     form = {
       ...emptyForm(),
       name: entry.name,
       type: config.type,
+      enabled: config.enabled ?? true,
       ...(config.type === "local"
         ? {
             command: config.command.join(" "),
@@ -136,59 +114,41 @@
           }
         : {
             url: config.url,
-            clientId: oauth?.clientId ?? "",
-            clientSecret: oauth?.clientSecret ?? "",
-            scope: oauth?.scope ?? "",
+            headers: Object.entries(config.headers ?? {}).map(([key, value]) => ({ key, value })),
           }),
     };
-    editingBase = config;
     manager.openDialog(true);
+  }
+
+  function recordFrom(rows: { key: string; value: string }[]): Record<string, string> {
+    return Object.fromEntries(
+      rows.filter((row) => row.key.trim()).map((row) => [row.key.trim(), row.value]),
+    );
   }
 
   function buildConfig(): McpServerConfig | string {
     if (!NAME_PATTERN.test(form.name)) {
       return "Name must start with a letter or digit and may only contain letters, digits, hyphens, and underscores";
     }
-    const base = editingBase?.type === form.type ? editingBase : null;
-    const carried = {
-      ...(base?.enabled !== undefined && { enabled: base.enabled }),
-      ...(base?.timeout !== undefined && { timeout: base.timeout }),
-    };
     if (form.type === "local") {
       const command = form.command.trim().split(/\s+/).filter(Boolean);
       if (command.length === 0) return "Command is required";
-      const environment = Object.fromEntries(
-        form.env.filter((row) => row.key.trim()).map((row) => [row.key.trim(), row.value]),
-      );
+      const environment = recordFrom(form.env);
       return {
         type: "local",
         command,
         ...(Object.keys(environment).length > 0 && { environment }),
-        ...carried,
+        ...(form.enabled ? {} : { enabled: false }),
       };
     }
     const url = form.url.trim();
     if (!url) return "URL is required";
-    const remoteBase = base as McpRemoteConfig | null;
-    const oauthFields = {
-      ...(form.clientId.trim() && { clientId: form.clientId.trim() }),
-      ...(form.clientSecret.trim() && { clientSecret: form.clientSecret.trim() }),
-      ...(form.scope.trim() && { scope: form.scope.trim() }),
-    };
-    const oauth =
-      Object.keys(oauthFields).length > 0
-        ? oauthFields
-        : remoteBase?.oauth !== undefined
-          ? remoteBase.oauth === false
-            ? (false as const)
-            : {}
-          : undefined;
+    const headers = recordFrom(form.headers);
     return {
       type: "remote",
       url,
-      ...(remoteBase?.headers && { headers: remoteBase.headers }),
-      ...(oauth !== undefined && { oauth }),
-      ...carried,
+      ...(Object.keys(headers).length > 0 && { headers }),
+      ...(form.enabled ? {} : { enabled: false }),
     };
   }
 
@@ -208,43 +168,36 @@
   }
 </script>
 
-{#snippet statusIndicator(entry: McpServerEntry)}
-  {@const key = entryKey(entry)}
-  {#if entry.status?.status === "connected"}
-    <span class="flex items-center gap-1.5 text-xs text-muted-foreground">
-      <span class="h-1.5 w-1.5 rounded-full bg-activity" aria-hidden="true"></span>
-      Connected
-    </span>
-  {:else if entry.status?.status === "disabled"}
-    <span class="text-xs text-muted-foreground">Disabled</span>
-  {:else if entry.status?.status === "failed"}
-    <button
-      type="button"
-      class="flex items-center gap-1 rounded-md text-xs text-destructive hover:underline focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
-      aria-expanded={expandedError === key}
-      onclick={() => (expandedError = expandedError === key ? null : key)}
-    >
-      Failed
-      <ChevronDownIcon
-        size={12}
-        class="transition-transform duration-200 {expandedError === key ? 'rotate-180' : ''}"
+{#snippet keyValueRows(
+  rows: { key: string; value: string }[],
+  keyPlaceholder: string,
+  valuePlaceholder: string,
+  addLabel: string,
+)}
+  {#each rows as row (row)}
+    <div class="flex items-center gap-2">
+      <Input aria-label="Name" bind:value={row.key} class="font-mono" placeholder={keyPlaceholder} />
+      <Input
+        aria-label="Value"
+        bind:value={row.value}
+        class="font-mono"
+        placeholder={valuePlaceholder}
       />
-    </button>
-  {:else if entry.status?.status === "needs_auth"}
-    <Button size="sm" variant="outline" onclick={() => startAuth(entry)}>Connect</Button>
-  {:else if entry.status?.status === "needs_client_registration"}
-    {#if canEdit(entry)}
-      <button
-        type="button"
-        class="rounded-md text-left text-xs text-destructive hover:underline focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
-        onclick={() => openEdit(entry)}
-      >
-        Registration rejected — provide a client ID
-      </button>
-    {:else}
-      <span class="text-xs text-destructive">Registration rejected — provide a client ID</span>
-    {/if}
-  {/if}
+      <IconButton aria-label="Remove row" onclick={() => rows.splice(rows.indexOf(row), 1)}>
+        <XIcon size={14} />
+      </IconButton>
+    </div>
+  {/each}
+  <Button
+    type="button"
+    variant="ghost"
+    size="sm"
+    class="gap-1"
+    onclick={() => rows.push({ key: "", value: "" })}
+  >
+    <PlusIcon size={14} />
+    {addLabel}
+  </Button>
 {/snippet}
 
 <ManagerListShell
@@ -267,13 +220,12 @@
           <div class="flex min-w-0 flex-1 items-center gap-2">
             <span class="truncate font-mono text-sm font-medium">{entry.name}</span>
             <Badge>{entry.config.type}</Badge>
-            {#if projectId && entry.scope.kind === "global"}
+            {#if projectId && entry.scope === "global"}
               <Badge>Global</Badge>
             {/if}
           </div>
-          <div class="flex items-center gap-3">
-            {@render statusIndicator(entry)}
-            {#if canEdit(entry)}
+          {#if canEdit(entry)}
+            <div class="flex items-center gap-3">
               <Toggle
                 checked={enabled}
                 onCheckedChange={() => toggleEnabled(entry)}
@@ -290,17 +242,12 @@
                   <Trash2Icon size={14} />
                 </IconButton>
               </div>
-            {/if}
-          </div>
+            </div>
+          {/if}
         </div>
         <p class="mt-1 truncate font-mono text-xs text-muted-foreground">
           {entry.config.type === "local" ? entry.config.command.join(" ") : entry.config.url}
         </p>
-        {#if entry.status?.status === "failed" && expandedError === entryKey(entry)}
-          <p class="mt-2 rounded-md bg-destructive/10 px-3 py-2 font-mono text-xs text-destructive">
-            {entry.status.error}
-          </p>
-        {/if}
       </li>
     {/each}
   </ul>
@@ -311,7 +258,7 @@
   title={manager.editing ? "Edit server" : "Add server"}
   description={manager.editing
     ? "Update the MCP server configuration."
-    : "Register an MCP server for the agent to use."}
+    : "Register an MCP server for agents to use."}
   error={manager.formError}
   saving={manager.saving}
   submitLabel={manager.editing ? "Save changes" : "Add server"}
@@ -358,28 +305,7 @@
     </div>
     <fieldset class="space-y-2">
       <legend class="{labelClass} pb-1.5">Environment variables</legend>
-      {#each form.env as row (row)}
-        <div class="flex items-center gap-2">
-          <Input aria-label="Variable name" bind:value={row.key} class="font-mono" placeholder="KEY" />
-          <Input aria-label="Variable value" bind:value={row.value} class="font-mono" placeholder="value" />
-          <IconButton
-            aria-label="Remove variable"
-            onclick={() => form.env.splice(form.env.indexOf(row), 1)}
-          >
-            <XIcon size={14} />
-          </IconButton>
-        </div>
-      {/each}
-      <Button
-        type="button"
-        variant="ghost"
-        size="sm"
-        class="gap-1"
-        onclick={() => form.env.push({ key: "", value: "" })}
-      >
-        <PlusIcon size={14} />
-        Add variable
-      </Button>
+      {@render keyValueRows(form.env, "KEY", "value", "Add variable")}
     </fieldset>
   {:else}
     <div class="space-y-1.5">
@@ -391,27 +317,14 @@
         placeholder="https://example.com/mcp"
       />
     </div>
-    <fieldset class="space-y-3">
-      <legend class="{labelClass} pb-1.5">OAuth <span class={hintClass}>(optional)</span></legend>
-      <div class="space-y-1.5">
-        <label class={labelClass} for="mcp-oauth-client-id">Client ID</label>
-        <Input id="mcp-oauth-client-id" bind:value={form.clientId} class="font-mono" />
-      </div>
-      <div class="space-y-1.5">
-        <label class={labelClass} for="mcp-oauth-client-secret">Client secret</label>
-        <Input
-          id="mcp-oauth-client-secret"
-          type="password"
-          bind:value={form.clientSecret}
-          class="font-mono"
-        />
-      </div>
-      <div class="space-y-1.5">
-        <label class={labelClass} for="mcp-oauth-scope">Scope</label>
-        <Input id="mcp-oauth-scope" bind:value={form.scope} class="font-mono" />
-      </div>
+    <fieldset class="space-y-2">
+      <legend class="{labelClass} pb-1.5">
+        Headers <span class={hintClass}>(e.g. Authorization for servers that need auth)</span>
+      </legend>
+      {@render keyValueRows(form.headers, "Authorization", "Bearer ...", "Add header")}
     </fieldset>
   {/if}
+
 </ManagerFormDialog>
 
 <ConfirmDeleteDialog
@@ -424,6 +337,6 @@
 >
   {#snippet description()}
     Remove <span class="font-mono text-foreground">{manager.deleteTarget?.name}</span> from the
-    configuration? The agent will lose access to its tools.
+    configuration? Agents will lose access to its tools.
   {/snippet}
 </ConfirmDeleteDialog>

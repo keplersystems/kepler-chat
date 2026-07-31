@@ -1,5 +1,5 @@
 <script lang="ts">
-  import type { MessageView } from '$lib/messages';
+  import type { MessageView } from '$lib/contracts';
   import MessageBubble from './MessageBubble.svelte';
   import { ThinkingOrb } from '$lib/components/ui/orb';
   import { ScrollArea } from '$lib/components/ui/scroll-area';
@@ -9,14 +9,9 @@
   interface Props {
     messages: MessageView[];
     isStreaming?: boolean;
-    onRegenerate?: (message: MessageView) => void;
-    onDelete?: (message: MessageView) => void;
-    onEdit?: (message: MessageView, text: string) => void;
-    onBranch?: (message: MessageView) => void;
   }
 
-  let { messages, isStreaming = false, onRegenerate, onDelete, onEdit, onBranch }: Props =
-    $props();
+  let { messages, isStreaming = false }: Props = $props();
 
   let viewport: HTMLElement | null = $state(null);
   let atBottom = $state(true);
@@ -58,10 +53,6 @@
           <MessageBubble
             {message}
             streaming={isStreaming && message.id === lastMessageId && message.role === "assistant"}
-            {onRegenerate}
-            {onDelete}
-            {onEdit}
-            {onBranch}
           />
         </div>
       {/each}

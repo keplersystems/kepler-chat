@@ -1,59 +1,33 @@
 <script lang="ts">
-  import type { MessageView } from "$lib/messages";
+  import type { MessageView } from "$lib/contracts";
   import { isAbnormalFinish, messageText } from "$lib/messages";
   import Markdown from "$lib/components/markdown/Markdown.svelte";
   import ToolCallCard from "./parts/ToolCallCard.svelte";
   import ReasoningBlock from "./parts/ReasoningBlock.svelte";
   import FileChip from "./parts/FileChip.svelte";
   import { ThinkingOrb } from "$lib/components/ui/orb";
-  import { Button } from "$lib/components/ui/button";
-  import * as DropdownMenu from "$lib/components/ui/dropdown-menu";
   import * as Tooltip from "$lib/components/ui/tooltip";
   import ProviderLogo from "$lib/components/ui/ProviderLogo.svelte";
   import CheckIcon from "@lucide/svelte/icons/check";
   import CopyIcon from "@lucide/svelte/icons/copy";
-  import GitBranchIcon from "@lucide/svelte/icons/git-branch";
-  import MoreHorizontalIcon from "@lucide/svelte/icons/more-horizontal";
-  import PencilIcon from "@lucide/svelte/icons/pencil";
-  import RefreshCwIcon from "@lucide/svelte/icons/refresh-cw";
   import SigmaIcon from "@lucide/svelte/icons/sigma";
-  import SlashSquareIcon from "@lucide/svelte/icons/square-slash";
-  import Trash2Icon from "@lucide/svelte/icons/trash-2";
 
   interface Props {
     message: MessageView;
     /** True while this message is the one currently being generated. */
     streaming?: boolean;
-    onRegenerate?: (message: MessageView) => void;
-    onDelete?: (message: MessageView) => void;
-    onEdit?: (message: MessageView, text: string) => void;
-    onBranch?: (message: MessageView) => void;
   }
 
-  let { message, streaming = false, onRegenerate, onDelete, onEdit, onBranch }: Props =
-    $props();
+  let { message, streaming = false }: Props = $props();
 
   let copied = $state(false);
   let copyTimer: ReturnType<typeof setTimeout> | null = null;
-  let menuOpen = $state(false);
-  let editing = $state(false);
-  let editDraft = $state("");
-
-  function startEdit() {
-    editDraft = messageText(message);
-    editing = true;
-  }
-
-  function commitEdit() {
-    const text = editDraft.trim();
-    editing = false;
-    if (!text || text === messageText(message)) return;
-    onEdit?.(message, text);
-  }
 
   const isUser = $derived(message.role === "user");
   const isAssistant = $derived(message.role === "assistant");
-  const displayFinish = $derived(isAbnormalFinish(message.finish) ? message.finish : null);
+  const displayFinish = $derived(
+    isAbnormalFinish(message.stopReason) ? message.stopReason : null,
+  );
   const totalTokens = $derived(message.tokens?.total);
   const lastPartId = $derived(message.parts.at(-1)?.id);
 
@@ -71,48 +45,19 @@
 
 <div class="group flex flex-col {isUser ? 'items-end' : 'items-stretch'}">
   {#if isUser}
-    {#if editing}
-      <div class="w-full max-w-[85%] sm:max-w-[70%]">
-        <!-- svelte-ignore a11y_autofocus -->
-        <textarea
-          bind:value={editDraft}
-          autofocus
-          rows={Math.min(editDraft.split("\n").length + 1, 10)}
-          class="w-full resize-none rounded-xl bg-secondary px-4 py-2.5 text-[15px] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring/50"
-          aria-label="Edit message"
-          onkeydown={(e) => {
-            if (e.key === "Escape") editing = false;
-            if (e.key === "Enter" && !e.shiftKey) {
-              e.preventDefault();
-              commitEdit();
-            }
-          }}
-        ></textarea>
-        <div class="mt-1.5 flex items-center justify-end gap-2">
-          {#each message.parts as part (part.id)}
-            {#if part.type === "file"}
-              <FileChip {part} />
-            {/if}
-          {/each}
-          <Button variant="ghost" size="sm" onclick={() => (editing = false)}>Cancel</Button>
-          <Button size="sm" onclick={commitEdit}>Send</Button>
-        </div>
-      </div>
-    {:else}
-      <div class="flex max-w-[85%] flex-col items-end gap-2 sm:max-w-[70%]">
-        {#each message.parts as part (part.id)}
-          {#if part.type === "text"}
-            <div
-              class="w-fit whitespace-pre-wrap break-words rounded-xl bg-secondary px-4 py-2.5 text-[15px]"
-            >
-              {part.text}
-            </div>
-          {:else if part.type === "file"}
-            <FileChip {part} />
-          {/if}
-        {/each}
-      </div>
-    {/if}
+    <div class="flex max-w-[85%] flex-col items-end gap-2 sm:max-w-[70%]">
+      {#each message.parts as part (part.id)}
+        {#if part.type === "text"}
+          <div
+            class="w-fit whitespace-pre-wrap break-words rounded-xl bg-secondary px-4 py-2.5 text-[15px]"
+          >
+            {part.text}
+          </div>
+        {:else if part.type === "file"}
+          <FileChip {part} />
+        {/if}
+      {/each}
+    </div>
   {:else}
     <div class="flex min-w-0 flex-col gap-2.5">
       {#each message.parts as part (part.id)}
@@ -126,23 +71,6 @@
           <ToolCallCard {part} />
         {:else if part.type === "file"}
           <FileChip {part} />
-        {:else if part.type === "command"}
-          <div class="flex items-center gap-2 font-mono text-xs text-muted-foreground">
-            <SlashSquareIcon size={13} class="opacity-70" />
-            /{part.name}
-            {part.args}
-          </div>
-        {:else if part.type === "retry"}
-          <div class="flex items-center gap-2 text-xs text-muted-foreground">
-            <RefreshCwIcon size={12} class="shrink-0 opacity-60" />
-            <span>Retry {part.attempt}</span>
-            <span class="min-w-0 truncate opacity-70">{part.message}</span>
-          </div>
-        {:else if part.type === "subtask"}
-          <div class="rounded-lg border border-border/70 border-l-2 border-l-primary/60 bg-card/60 px-3 py-2 text-xs">
-            <span class="font-mono font-medium">{part.agent}</span>
-            <span class="ml-2 text-muted-foreground">{part.description}</span>
-          </div>
         {/if}
       {/each}
       {#if message.error}
@@ -161,14 +89,12 @@
       ? 'flex-row-reverse'
       : ''}"
   >
-    {#if isAssistant && (message.modelID || totalTokens !== undefined)}
+    {#if isAssistant && (message.modelValue || totalTokens !== undefined)}
       <div class="flex items-center gap-2">
-        {#if message.modelID}
+        {#if message.modelValue}
           <span class="inline-flex items-center gap-1.5 font-mono text-[11px] opacity-80">
-            {#if message.providerID}
-              <ProviderLogo providerId={message.providerID} size={12} />
-            {/if}
-            {message.modelID}
+            <ProviderLogo modelValue={message.modelValue} size={12} />
+            {message.modelValue}
           </span>
         {/if}
         {#if totalTokens !== undefined}
@@ -187,9 +113,9 @@
                   <span class="text-right tabular-nums">{message.tokens.input}</span>
                   <span class="opacity-70">Output</span>
                   <span class="text-right tabular-nums">{message.tokens.output}</span>
-                  {#if message.tokens.reasoning}
+                  {#if message.tokens.thought}
                     <span class="opacity-70">Reasoning</span>
-                    <span class="text-right tabular-nums">{message.tokens.reasoning}</span>
+                    <span class="text-right tabular-nums">{message.tokens.thought}</span>
                   {/if}
                   {#if message.tokens.cacheRead}
                     <span class="opacity-70">Cache read</span>
@@ -214,9 +140,7 @@
     {/if}
 
     <div
-      class="flex items-center gap-0.5 transition-opacity duration-200 ease-out {menuOpen
-        ? 'opacity-100'
-        : 'opacity-0 group-hover:opacity-100 focus-within:opacity-100'}"
+      class="flex items-center gap-0.5 opacity-0 transition-opacity duration-200 ease-out group-hover:opacity-100 focus-within:opacity-100"
     >
       <Tooltip.Root>
         <Tooltip.Trigger
@@ -231,49 +155,6 @@
         </Tooltip.Trigger>
         <Tooltip.Content>{copied ? "Copied" : "Copy"}</Tooltip.Content>
       </Tooltip.Root>
-      {#if isUser && onEdit && !editing}
-        <Tooltip.Root>
-          <Tooltip.Trigger
-            onclick={startEdit}
-            class="rounded-md p-1 hover:bg-accent hover:text-accent-foreground"
-            aria-label="Edit message"
-          >
-            <PencilIcon size={13} />
-          </Tooltip.Trigger>
-          <Tooltip.Content>Edit &amp; resend</Tooltip.Content>
-        </Tooltip.Root>
-      {/if}
-      {#if isAssistant && (onRegenerate || onBranch || onDelete)}
-        <DropdownMenu.Root bind:open={menuOpen}>
-          <DropdownMenu.Trigger
-            class="rounded-md p-1 hover:bg-accent hover:text-accent-foreground"
-            aria-label="More actions"
-          >
-            <MoreHorizontalIcon size={13} />
-          </DropdownMenu.Trigger>
-          <DropdownMenu.Content align="start">
-            {#if onRegenerate}
-              <DropdownMenu.Item onSelect={() => onRegenerate?.(message)}>
-                <RefreshCwIcon size={14} class="opacity-70" />
-                Regenerate
-              </DropdownMenu.Item>
-            {/if}
-            {#if onBranch}
-              <DropdownMenu.Item onSelect={() => onBranch?.(message)}>
-                <GitBranchIcon size={14} class="opacity-70" />
-                Branch
-              </DropdownMenu.Item>
-            {/if}
-            {#if onDelete}
-              <DropdownMenu.Separator />
-              <DropdownMenu.Item variant="destructive" onSelect={() => onDelete?.(message)}>
-                <Trash2Icon size={14} class="opacity-70" />
-                Delete
-              </DropdownMenu.Item>
-            {/if}
-          </DropdownMenu.Content>
-        </DropdownMenu.Root>
-      {/if}
     </div>
 
     {#if displayFinish}

@@ -1,18 +1,28 @@
-import type { PendingRequestDTO, SendMessageInput } from "$lib/contracts";
+import { downloadFileUrl } from "$lib/contracts";
+import type {
+  AgentCommand,
+  MessageView,
+  PendingRequestDTO,
+  PlanEntry,
+  SendMessageInput,
+  SessionConfigDTO,
+  SessionUsageDTO,
+} from "$lib/contracts";
 import { invalidateAll } from "$app/navigation";
 import { parseSSEStream } from "$lib/sse";
-import { api, downloadFileUrl } from "$lib/api";
-import type { MessageView } from "$lib/messages";
+import { api } from "$lib/api";
 import { createMessageStream } from "$lib/state/stream";
 import { notifyRunFinished } from "$lib/notifications";
-import type { Todo } from "@opencode-ai/sdk/v2";
 
 function createChatStore() {
   let pendingRequests = $state<PendingRequestDTO[]>([]);
   let lastError = $state<string | null>(null);
   let streamingByConversation = $state<Record<string, MessageView[]>>({});
   let activeStreams = $state<Record<string, true>>({});
-  let todosByConversation = $state<Record<string, Todo[]>>({});
+  let planByConversation = $state<Record<string, PlanEntry[]>>({});
+  let usageByConversation = $state<Record<string, SessionUsageDTO>>({});
+  let configByConversation = $state<Record<string, SessionConfigDTO>>({});
+  let commandsByConversation = $state<Record<string, AgentCommand[]>>({});
 
   const controllers = new Map<string, AbortController>();
 
@@ -24,8 +34,37 @@ function createChatStore() {
     return conversationId in activeStreams;
   }
 
-  function todosFor(conversationId: string): Todo[] {
-    return todosByConversation[conversationId] ?? [];
+  function planFor(conversationId: string): PlanEntry[] {
+    return planByConversation[conversationId] ?? [];
+  }
+
+  function usageFor(conversationId: string): SessionUsageDTO | null {
+    return usageByConversation[conversationId] ?? null;
+  }
+
+  function configFor(conversationId: string): SessionConfigDTO | null {
+    return configByConversation[conversationId] ?? null;
+  }
+
+  function setConfig(conversationId: string, config: SessionConfigDTO) {
+    configByConversation = { ...configByConversation, [conversationId]: config };
+  }
+
+  function commandsFor(conversationId: string): AgentCommand[] {
+    return commandsByConversation[conversationId] ?? [];
+  }
+
+  function setCommands(conversationId: string, commands: AgentCommand[]) {
+    commandsByConversation = { ...commandsByConversation, [conversationId]: commands };
+  }
+
+  async function loadCommands(conversationId: string) {
+    const { data } = await api.api.conversations({ id: conversationId }).commands.get();
+    if (data) setCommands(conversationId, data.commands);
+  }
+
+  function setUsage(conversationId: string, usage: SessionUsageDTO) {
+    usageByConversation = { ...usageByConversation, [conversationId]: usage };
   }
 
   function clearStreaming(conversationId: string) {
@@ -46,16 +85,6 @@ function createChatStore() {
     activeStreams = next;
   }
 
-  function reset() {
-    for (const controller of controllers.values()) controller.abort();
-    controllers.clear();
-    pendingRequests = [];
-    lastError = null;
-    streamingByConversation = {};
-    activeStreams = {};
-    todosByConversation = {};
-  }
-
   function setError(message: string | null) {
     lastError = message;
   }
@@ -66,20 +95,17 @@ function createChatStore() {
 
   function upsertPendingRequest(request: PendingRequestDTO) {
     const idx = pendingRequests.findIndex(
-      (r) => r.type === request.type && r.request.id === request.request.id,
+      (entry) => entry.request.requestId === request.request.requestId,
     );
-    if (idx === -1) {
-      pendingRequests = [...pendingRequests, request];
-      return;
-    }
-    pendingRequests = pendingRequests.with(idx, request);
+    if (idx === -1) pendingRequests = [...pendingRequests, request];
+    else pendingRequests = pendingRequests.with(idx, request);
   }
 
   function removePendingRequest(requestId: string) {
-    pendingRequests = pendingRequests.filter((r) => r.request.id !== requestId);
+    pendingRequests = pendingRequests.filter((entry) => entry.request.requestId !== requestId);
   }
 
-  /** Abort the running stream and ask OpenCode to stop generating. */
+  /** Abort the running stream and ask the agent to stop generating. */
   function stop(conversationId: string) {
     const controller = controllers.get(conversationId);
     if (!controller) return;
@@ -92,10 +118,13 @@ function createChatStore() {
       onTitle,
       onRequestAsked: upsertPendingRequest,
       onRequestSettled: removePendingRequest,
-      onTodos: (todos: Todo[]) => {
-        todosByConversation = { ...todosByConversation, [conversationId]: todos };
+      onPlan: (entries: PlanEntry[]) => {
+        planByConversation = { ...planByConversation, [conversationId]: entries };
       },
-      onSessionError: setError,
+      onUsage: (usage: SessionUsageDTO) => setUsage(conversationId, usage),
+      onConfig: (config: SessionConfigDTO) => setConfig(conversationId, config),
+      onCommands: (commands: AgentCommand[]) => setCommands(conversationId, commands),
+      onError: setError,
     };
   }
 
@@ -129,6 +158,9 @@ function createChatStore() {
     } finally {
       controllers.delete(conversationId);
       setStreamActive(conversationId, false);
+      const next = { ...planByConversation };
+      delete next[conversationId];
+      planByConversation = next;
       notifyRunFinished(succeeded);
       try {
         await invalidateAll();
@@ -140,9 +172,12 @@ function createChatStore() {
     return succeeded;
   }
 
-  async function send(
+  /** Open a turn endpoint and render its SSE body, echoing the submission meanwhile. */
+  async function startTurn(
     conversationId: string,
-    input: SendMessageInput,
+    echoParts: MessageView["parts"],
+    path: string,
+    body: unknown,
     onTitle?: (title: string) => void,
   ): Promise<boolean> {
     setError(null);
@@ -150,31 +185,68 @@ function createChatStore() {
     const controller = new AbortController();
     controllers.set(conversationId, controller);
 
-    const stream = createMessageStream(
-      input,
-      (path) => downloadFileUrl(conversationId, path, "input"),
-      streamEffects(conversationId, onTitle),
-    );
+    const stream = createMessageStream(streamEffects(conversationId, onTitle), {
+      id: "echo",
+      role: "user",
+      parts: echoParts,
+      createdAt: Date.now(),
+    });
     writeStreaming(conversationId, stream.visible());
 
     return runStream(conversationId, controller, stream, async () => {
-      const response = await fetch(`/api/conversations/${conversationId}/messages`, {
+      const response = await fetch(`/api/conversations/${conversationId}/${path}`, {
         method: "POST",
         credentials: "include",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify(input),
+        body: JSON.stringify(body),
         signal: controller.signal,
       });
 
       if (!response.ok || !response.body) {
-        const payload = (await response.json().catch(() => null)) as
-          | { error?: string }
-          | null;
+        const payload = (await response.json().catch(() => null)) as { error?: string } | null;
         throw new Error(payload?.error ?? `Stream failed (${response.status})`);
       }
       void invalidateAll();
       return response.body;
     });
+  }
+
+  function send(
+    conversationId: string,
+    input: SendMessageInput,
+    onTitle?: (title: string) => void,
+  ): Promise<boolean> {
+    const echoParts: MessageView["parts"] = [];
+    if (input.text.trim()) {
+      echoParts.push({ id: "echo-text", type: "text", text: input.text.trim() });
+    }
+    for (const [i, attachment] of (input.attachments ?? []).entries()) {
+      echoParts.push({
+        id: `echo-file-${i}`,
+        type: "file",
+        url: downloadFileUrl(conversationId, attachment.path, "input"),
+        filename: attachment.filename ?? attachment.path,
+        mimeType: attachment.mimeType,
+      });
+    }
+    return startTurn(conversationId, echoParts, "messages", input, onTitle);
+  }
+
+  /** Run an agent-advertised slash command as a turn. */
+  function runCommand(
+    conversationId: string,
+    name: string,
+    args?: string,
+    onTitle?: (title: string) => void,
+  ): Promise<boolean> {
+    const text = args?.trim() ? `/${name} ${args.trim()}` : `/${name}`;
+    return startTurn(
+      conversationId,
+      [{ id: "echo-text", type: "text", text }],
+      "commands",
+      { name, args },
+      onTitle,
+    );
   }
 
   /** Reattach to a generation started before this page/tab loaded, if any. */
@@ -206,7 +278,7 @@ function createChatStore() {
     const body = response.body;
     controllers.set(conversationId, controller);
     setStreamActive(conversationId, true);
-    const stream = createMessageStream(null, () => "", streamEffects(conversationId, onTitle));
+    const stream = createMessageStream(streamEffects(conversationId, onTitle));
     await runStream(conversationId, controller, stream, async () => body);
   }
 
@@ -214,23 +286,25 @@ function createChatStore() {
     get pendingRequests() {
       return pendingRequests;
     },
-    get isStreaming() {
-      return Object.keys(activeStreams).length > 0;
-    },
     get lastError() {
       return lastError;
     },
     isStreamingFor,
-    todosFor,
+    planFor,
+    usageFor,
+    configFor,
+    setConfig,
+    setUsage,
+    commandsFor,
+    loadCommands,
     streamingMessagesFor,
     setPendingRequests,
-    upsertPendingRequest,
     removePendingRequest,
     setError,
     send,
+    runCommand,
     attach,
     stop,
-    reset,
   };
 }
 

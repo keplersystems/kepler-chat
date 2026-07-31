@@ -1,7 +1,8 @@
 import { error, fail, redirect } from "@sveltejs/kit";
 import { serverApi } from "$lib/api";
 import { deleteConversation } from "$lib/server/conversations";
-import { deleteProject, renameProject, setProjectInstructions } from "$lib/server/projects";
+import { deleteProject, renameProject } from "$lib/server/projects";
+import { writeProjectInstructions } from "$lib/server/runtime";
 import type { Actions, PageServerLoad } from "./$types";
 
 export const load: PageServerLoad = async ({ fetch, params, url }) => {
@@ -28,7 +29,7 @@ export const actions: Actions = {
     if (typeof content !== "string") {
       return fail(400, { error: "Content required" });
     }
-    await setProjectInstructions(params.id, content);
+    await writeProjectInstructions(params.id, content);
     return { success: true };
   },
 

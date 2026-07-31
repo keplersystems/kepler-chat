@@ -1,15 +1,18 @@
 <script lang="ts">
-  import { getProviderIconSvg } from "$lib/providerIcons";
+  import { getProviderIconSvg, providerIdForModelValue } from "$lib/providerIcons";
 
   interface Props {
-    providerId: string;
+    providerId?: string;
+    /** Agent-reported model value ("provider/model" or a bare model id). */
+    modelValue?: string;
     size?: number;
     class?: string;
   }
 
-  let { providerId, size = 14, class: className = "" }: Props = $props();
+  let { providerId, modelValue, size = 14, class: className = "" }: Props = $props();
 
-  let svg = $derived(getProviderIconSvg(providerId));
+  const resolved = $derived(providerId ?? (modelValue ? providerIdForModelValue(modelValue) : null));
+  let svg = $derived(resolved ? getProviderIconSvg(resolved) : null);
 </script>
 
 {#if svg}

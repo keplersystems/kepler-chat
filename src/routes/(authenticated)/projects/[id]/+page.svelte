@@ -5,9 +5,9 @@
   import type { SubmitFunction } from "@sveltejs/kit";
   import { INSTRUCTIONS_MAX_LENGTH, type ConversationDTO, type ProjectDTO } from "$lib/contracts";
   import { focusInput, relativeTime } from "$lib/utils";
-  import { modelCatalog } from "$lib/state/providers.svelte";
+  import { agentCatalog } from "$lib/state/agents.svelte";
   import { startChat } from "$lib/state/start-chat";
-  import type { ModelSelection } from "$lib/types";
+  import type { AgentId } from "$lib/contracts";
   import MessageInput from "$lib/components/chat/MessageInput.svelte";
   import McpServerManager from "$lib/components/mcp/McpServerManager.svelte";
   import SkillManager from "$lib/components/skills/SkillManager.svelte";
@@ -52,11 +52,11 @@
 
   const instructionsDirty = $derived(instructions !== data.project.instructions);
 
-  let selectedModel = $state<ModelSelection | null>(null);
+  let selectedAgent = $state<AgentId | null>(null);
 
   $effect(() => {
-    modelCatalog.loadDefault().then((model) => {
-      if (!selectedModel) selectedModel = model;
+    agentCatalog.loadDefault().then((agentId) => {
+      if (!selectedAgent) selectedAgent = agentId;
     });
   });
 
@@ -68,18 +68,10 @@
     });
   });
 
-  function handleModelChange(model: ModelSelection) {
-    selectedModel = model;
-    modelCatalog.remember(model);
-  }
-
-  const handleSend = (
-    text: string,
-    model: ModelSelection,
-    files?: File[],
-    mediaIds?: string[],
-    variant?: string,
-  ) => startChat(text, model, files, data.project.id, mediaIds, variant);
+  const handleSend = (text: string, files?: File[], mediaIds?: string[]) =>
+    selectedAgent
+      ? startChat(text, selectedAgent, files, data.project.id, mediaIds)
+      : Promise.resolve(false);
 
   function startRename() {
     nameDraft = data.project.name;
@@ -173,14 +165,12 @@
 
         <div class="mt-6">
           <MessageInput
-          onSubmit={handleSend}
-          disabled={modelCatalog.loading}
-          placeholder="Start a chat in this project…"
-          providers={modelCatalog.providers}
-          connectedProviders={modelCatalog.connected}
-          {selectedModel}
-          onModelChange={handleModelChange}
-        />
+            onSubmit={handleSend}
+            disabled={agentCatalog.loading || !selectedAgent}
+            placeholder="Start a chat in this project…"
+            agentId={selectedAgent}
+            onAgentChange={(agentId) => (selectedAgent = agentId)}
+          />
         </div>
 
         <ul class="mt-8 divide-y divide-border">

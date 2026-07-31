@@ -1,11 +1,12 @@
 import { Elysia, t } from "elysia";
+import { SKILL_NAME_PATTERN } from "$lib/contracts";
 import { INSTRUCTIONS_MAX_LENGTH } from "$lib/contracts";
 import { requireAuth } from "$lib/server/auth";
-import { requireProject, resolveConfigScope } from "$lib/server/projects";
+import { requireProject } from "$lib/server/projects";
 import {
   deleteSkill,
   listSkills,
-  SKILL_NAME_PATTERN,
+  
   upsertSkill,
 } from "$lib/server/skills";
 
@@ -19,8 +20,7 @@ export const skillsRoute = new Elysia({ prefix: "/api/skills" })
     async (context) => {
       requireAuth(context);
       if (context.query.projectId) await requireProject(context.query.projectId);
-      const skills = await listSkills(context.query.projectId);
-      return { skills };
+      return { skills: await listSkills(context.query.projectId ?? null) };
     },
     {
       query: t.Object({ projectId: t.Optional(t.String()) }),
@@ -28,7 +28,7 @@ export const skillsRoute = new Elysia({ prefix: "/api/skills" })
         summary: "List skills",
         tags: ["Skills"],
         description:
-          "List skills as OpenCode discovers them (global, plus a project's own when projectId is given)",
+          "List skills as agents discover them (global, plus a project's own when projectId is given)",
       },
     },
   )
@@ -36,8 +36,13 @@ export const skillsRoute = new Elysia({ prefix: "/api/skills" })
     "/:name",
     async (context) => {
       requireAuth(context);
-      const scope = await resolveConfigScope(context.body.projectId);
-      await upsertSkill(scope, context.params.name, context.body.description, context.body.content);
+      if (context.body.projectId) await requireProject(context.body.projectId);
+      await upsertSkill(
+        context.params.name,
+        context.body.projectId ?? null,
+        context.body.description,
+        context.body.content,
+      );
       return { success: true as const };
     },
     {
@@ -50,7 +55,7 @@ export const skillsRoute = new Elysia({ prefix: "/api/skills" })
       detail: {
         summary: "Create or update skill",
         tags: ["Skills"],
-        description: "Write the skill's SKILL.md and reload affected OpenCode instances",
+        description: "Write the skill's SKILL.md and resync conversation workspaces",
       },
     },
   )
@@ -58,8 +63,8 @@ export const skillsRoute = new Elysia({ prefix: "/api/skills" })
     "/:name",
     async (context) => {
       requireAuth(context);
-      const scope = await resolveConfigScope(context.query.projectId);
-      await deleteSkill(scope, context.params.name);
+      if (context.query.projectId) await requireProject(context.query.projectId);
+      await deleteSkill(context.params.name, context.query.projectId ?? null);
       return { success: true as const };
     },
     {

@@ -1,5 +1,5 @@
 <script lang="ts">
-  import type { PartView } from "$lib/messages";
+  import type { PartView } from "$lib/contracts";
   import FileIcon from "@lucide/svelte/icons/file";
 
   interface Props {
@@ -9,10 +9,10 @@
   const { part }: Props = $props();
 </script>
 
-{#if part.mime.startsWith("image/")}
+{#if part.mimeType?.startsWith("image/")}
   <img
     src={part.url}
-    alt={part.filename ?? "attachment"}
+    alt={part.filename}
     class="max-h-80 max-w-full rounded-lg border border-border/60"
     loading="lazy"
   />
@@ -23,6 +23,6 @@
     class="inline-flex w-fit items-center gap-2 rounded-md border border-border/70 bg-card/60 px-3 py-1.5 text-xs text-muted-foreground hover:bg-accent hover:text-accent-foreground"
   >
     <FileIcon size={13} class="opacity-70" />
-    <span class="max-w-64 truncate font-mono">{part.filename ?? "file"}</span>
+    <span class="max-w-64 truncate font-mono">{part.filename}</span>
   </a>
 {/if}

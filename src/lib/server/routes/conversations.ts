@@ -1,13 +1,12 @@
 import { Elysia, t } from "elysia";
+import { AGENT_IDS } from "$lib/contracts";
 import { db } from "$lib/server/db/client";
 import { requireAuth } from "$lib/server/auth";
 import {
   branchConversation,
   createConversation,
-  compactConversation,
   deleteConversation,
   renameConversation,
-  revertConversation,
   requireConversation,
 } from "$lib/server/conversations";
 
@@ -32,17 +31,24 @@ export const conversationsRoute = new Elysia({ prefix: "/api/conversations" })
     "/",
     async (context) => {
       requireAuth(context);
-      return createConversation(context.body.title, context.body.projectId ?? null);
+      return createConversation(
+        context.body.agentId,
+        context.body.title,
+        context.body.projectId ?? null,
+        context.body.configOptions ?? {},
+      );
     },
     {
       body: t.Object({
+        agentId: t.UnionEnum([...AGENT_IDS]),
         title: t.String({ minLength: 1, maxLength: 255 }),
         projectId: t.Optional(t.String({ minLength: 1 })),
+        configOptions: t.Optional(t.Record(t.String(), t.String())),
       }),
       detail: {
         summary: "Create conversation",
         tags: ["Conversations"],
-        description: "Create a new conversation (OpenCode session), optionally inside a project",
+        description: "Create a new conversation for an agent, optionally inside a project",
       },
     },
   )
@@ -65,16 +71,15 @@ export const conversationsRoute = new Elysia({ prefix: "/api/conversations" })
     "/:id/branch",
     async (context) => {
       requireAuth(context);
-      return branchConversation(context.params.id, context.body.messageID);
+      return branchConversation(context.params.id);
     },
     {
       params: t.Object({ id: t.String() }),
-      body: t.Object({ messageID: t.Optional(t.String({ minLength: 1 })) }),
       detail: {
         summary: "Branch conversation",
         tags: ["Conversations"],
         description:
-          "Fork a conversation (and its working directory) at a message into a new conversation",
+          "Fork a conversation (working directory, history, and session when supported) into a new conversation",
       },
     },
   )
@@ -90,41 +95,7 @@ export const conversationsRoute = new Elysia({ prefix: "/api/conversations" })
       detail: {
         summary: "Rename conversation",
         tags: ["Conversations"],
-        description: "Rename a conversation and its OpenCode session",
-      },
-    },
-  )
-  .post(
-    "/:id/compact",
-    async (context) => {
-      requireAuth(context);
-      await compactConversation(context.params.id);
-      return { success: true };
-    },
-    {
-      params: t.Object({ id: t.String() }),
-      detail: {
-        summary: "Compact conversation",
-        tags: ["Conversations"],
-        description: "AI-summarize the session history to free context window",
-      },
-    },
-  )
-  .post(
-    "/:id/revert",
-    async (context) => {
-      requireAuth(context);
-      await revertConversation(context.params.id, context.body.messageID);
-      return { success: true };
-    },
-    {
-      params: t.Object({ id: t.String() }),
-      body: t.Object({ messageID: t.String({ minLength: 1 }) }),
-      detail: {
-        summary: "Revert conversation",
-        tags: ["Conversations"],
-        description:
-          "Revert the OpenCode session to just before a message; sending afterwards discards the reverted tail",
+        description: "Rename a conversation",
       },
     },
   )
@@ -140,7 +111,7 @@ export const conversationsRoute = new Elysia({ prefix: "/api/conversations" })
       detail: {
         summary: "Delete conversation",
         tags: ["Conversations"],
-        description: "Delete a conversation, its OpenCode session, and files",
+        description: "Delete a conversation, its agent session, and files",
       },
     },
   )
@@ -158,7 +129,7 @@ export const conversationsRoute = new Elysia({ prefix: "/api/conversations" })
       detail: {
         summary: "Delete conversations",
         tags: ["Conversations"],
-        description: "Delete multiple conversations, their OpenCode sessions, and files",
+        description: "Delete multiple conversations, their agent sessions, and files",
       },
     },
   );

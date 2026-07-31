@@ -44,9 +44,7 @@
 
 <div class="space-y-4">
   <p class="text-sm text-muted-foreground">
-    Applied to every conversation — the AGENTS.md at the sessions root. Project instructions
-    stack on top of it.
-  </p>
+    Applied to every conversation. Project instructions stack on top.</p>
 
   {#if error}
     <p class="text-sm text-destructive" role="alert">{error}</p>

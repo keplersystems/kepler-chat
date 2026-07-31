@@ -1,8 +1,6 @@
-// Provider id → inline SVG mapping.
-// Keys are OpenCode provider IDs (see references/opencode/.../provider-icons/types.ts).
-// Values are LobeHub `@lobehub/icons-static-svg` mono SVGs imported as raw strings.
-// SVGs use fill="currentColor", so they inherit the parent's CSS color.
-// Only providers OpenCode supports are listed; unmapped ones render no logo.
+// Provider id → inline SVG, keyed by models.dev provider id. LobeHub mono SVGs
+// use fill="currentColor" so they inherit the parent's colour; unmapped
+// providers render no logo.
 
 import aihubmix from "@lobehub/icons-static-svg/icons/aihubmix.svg?raw";
 import ai302 from "@lobehub/icons-static-svg/icons/ai302.svg?raw";
@@ -149,4 +147,28 @@ const NORMALIZED: Record<string, string> = Object.fromEntries(
 
 export function getProviderIconSvg(providerId: string): string | null {
   return NORMALIZED[providerId] ?? null;
+}
+
+/** Model families whose bare ids (no "provider/" prefix) map to a known provider. */
+const MODEL_PREFIX_PROVIDERS: Array<[RegExp, string]> = [
+  [/^claude/, "anthropic"],
+  [/^(gpt|o[134]|codex)/, "openai"],
+  [/^gemini/, "google"],
+  [/^grok/, "xai"],
+  [/^(deepseek|ds-)/, "deepseek"],
+  [/^(qwen|qwq)/, "alibaba"],
+  [/^glm/, "zhipuai"],
+  [/^kimi/, "moonshotai"],
+  [/^mistral|^magistral|^devstral/, "mistral"],
+  [/^llama/, "llama"],
+];
+
+export function providerIdForModelValue(modelValue: string): string | null {
+  const slash = modelValue.indexOf("/");
+  if (slash > 0) {
+    const providerId = modelValue.slice(0, slash);
+    if (NORMALIZED[providerId]) return providerId;
+  }
+  const bare = (slash > 0 ? modelValue.slice(slash + 1) : modelValue).toLowerCase();
+  return MODEL_PREFIX_PROVIDERS.find(([pattern]) => pattern.test(bare))?.[1] ?? null;
 }

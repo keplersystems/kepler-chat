@@ -3,6 +3,7 @@
   import { api, apiErrorMessage } from "$lib/api";
   import type { UsageResponse } from "$lib/contracts";
   import { ThinkingOrb } from "$lib/components/ui/orb";
+  import ProviderLogo from "$lib/components/ui/ProviderLogo.svelte";
 
   let data = $state<UsageResponse | null>(null);
   let error = $state<string | null>(null);
@@ -72,6 +73,7 @@
         <table class="w-full text-sm">
           <thead>
             <tr class="border-b text-left text-xs text-muted-foreground">
+              <th class="py-2 pr-4 font-medium">Agent</th>
               <th class="py-2 pr-4 font-medium">Model</th>
               <th class="py-2 pr-4 text-right font-medium">In</th>
               <th class="py-2 pr-4 text-right font-medium">Out</th>
@@ -81,10 +83,14 @@
             </tr>
           </thead>
           <tbody class="divide-y divide-border font-mono text-xs tabular-nums">
-            {#each data.models as model (`${model.providerID}:${model.modelID}`)}
+            {#each data.models as model (`${model.agentId}:${model.modelValue}`)}
               <tr>
-                <td class="max-w-52 truncate py-2 pr-4" title={`${model.providerID}/${model.modelID}`}>
-                  {model.modelID}
+                <td class="py-2 pr-4">{model.agentId}</td>
+                <td class="max-w-52 py-2 pr-4" title={model.modelValue}>
+                  <span class="flex items-center gap-1.5">
+                    <ProviderLogo modelValue={model.modelValue} size={14} />
+                    <span class="truncate">{model.modelValue}</span>
+                  </span>
                 </td>
                 <td class="py-2 pr-4 text-right">{formatTokens(model.input)}</td>
                 <td class="py-2 pr-4 text-right">{formatTokens(model.output)}</td>

@@ -1,19 +1,18 @@
 import type { Handle } from "@sveltejs/kit";
 import { isAuthenticated } from "$lib/server/auth";
-import { opencodeServer } from "$lib/server/opencode/supervisor";
+import { stopAllAgents } from "$lib/server/acp/engine";
 
 declare global {
   // eslint-disable-next-line no-var
-  var __KEPLER_OPENCODE_BOOTED__: boolean | undefined;
+  var __KEPLER_BOOTED__: boolean | undefined;
 }
 
-if (!globalThis.__KEPLER_OPENCODE_BOOTED__) {
-  globalThis.__KEPLER_OPENCODE_BOOTED__ = true;
-  await opencodeServer.start();
+if (!globalThis.__KEPLER_BOOTED__) {
+  globalThis.__KEPLER_BOOTED__ = true;
 
   const shutdown = async () => {
     try {
-      await opencodeServer.stop();
+      await stopAllAgents();
     } finally {
       process.exit(0);
     }

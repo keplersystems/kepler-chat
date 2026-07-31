@@ -1,16 +1,46 @@
-// Shared DTOs and SSE envelope types. These describe the wire shape between
-// the Elysia API and any client (web, native). Most other types are inferred
-// directly from the Elysia App via Eden treaty. SSE payloads are the OpenCode
-// SDK event `properties`, forwarded verbatim by the messages route.
+// Shared DTOs and SSE envelope types describing the wire between the Elysia
+// API and any client. The engine speaks ACP; where a wire shape is literally
+// an ACP schema type it is imported type-only from the SDK, everything else is
+// Kepler-owned.
 
-import type { Event, PermissionRequest, QuestionRequest } from "@opencode-ai/sdk/v2";
+import type {
+  ElicitationSchema,
+  PermissionOptionKind,
+  PlanEntry,
+  SessionConfigOption,
+  SessionMode,
+  StopReason,
+  ToolCallLocation,
+  ToolKind,
+} from "@agentclientprotocol/sdk";
+
+export type {
+  ElicitationSchema,
+  PermissionOptionKind,
+  PlanEntry,
+  SessionConfigOption,
+  SessionMode,
+  StopReason,
+  ToolCallLocation,
+  ToolKind,
+};
 
 /** Max length for instruction/skill documents, enforced by API schemas and form inputs. */
 export const INSTRUCTIONS_MAX_LENGTH = 65536;
 
+export const AGENT_IDS = ["opencode", "claude", "codex"] as const;
+export const STOP_REASONS = [
+  "end_turn",
+  "max_tokens",
+  "max_turn_requests",
+  "refusal",
+  "cancelled",
+] as const satisfies readonly StopReason[];
+export type AgentId = (typeof AGENT_IDS)[number];
+
 export interface ConversationDTO {
   id: string;
-  opencode_session_id: string;
+  agent_id: AgentId;
   project_id: string | null;
   title: string;
   created_at: Date;
@@ -24,13 +54,60 @@ export interface ProjectDTO {
   updated_at: Date;
 }
 
+
+export type ToolStatus = "pending" | "in_progress" | "completed" | "failed";
+
+export type ToolContentView =
+  | { type: "text"; text: string }
+  | { type: "diff"; path: string; oldText?: string | null; newText: string };
+
+export type PartView =
+  | { id: string; type: "text"; text: string }
+  | { id: string; type: "reasoning"; text: string }
+  | {
+      id: string;
+      type: "tool";
+      toolCallId: string;
+      title: string;
+      kind: ToolKind;
+      status: ToolStatus;
+      content: ToolContentView[];
+      locations: ToolCallLocation[];
+      rawInput?: unknown;
+      rawOutput?: unknown;
+    }
+  | {
+      id: string;
+      type: "file";
+      url: string;
+      filename: string;
+      mimeType?: string;
+    };
+
+export interface TurnTokens {
+  input: number;
+  output: number;
+  thought?: number;
+  cacheRead?: number;
+  cacheWrite?: number;
+  total: number;
+}
+
+export interface MessageView {
+  id: string;
+  role: "user" | "assistant";
+  parts: PartView[];
+  stopReason?: StopReason;
+  error?: string;
+  modelValue?: string;
+  cost?: number;
+  tokens?: TurnTokens;
+  createdAt: number;
+  completedAt?: number;
+}
+
 export interface SendMessageInput {
   text: string;
-  model: {
-    providerID: string;
-    modelID: string;
-  };
-  variant?: string;
   attachments?: Array<{
     path: string;
     mimeType?: string;
@@ -38,9 +115,151 @@ export interface SendMessageInput {
   }>;
 }
 
+
+export interface SessionConfigDTO {
+  configOptions: SessionConfigOption[];
+  modes: { currentModeId: string; availableModes: SessionMode[] } | null;
+  /** Agent-advertised session capabilities the UI must not offer without. */
+  capabilities: { fork: boolean };
+}
+
+/**
+ * Agents key the model option by `category` per spec, but some only set `id`;
+ * every consumer must agree or enrichment and persistence disagree.
+ */
+export function isModelOption(option: SessionConfigOption): boolean {
+  return option.category === "model" || option.id === "model";
+}
+
+export interface SessionUsageDTO {
+  used: number;
+  size: number;
+  cost: number | null;
+}
+
+/** A slash command the agent advertises via `available_commands_update`. */
+export interface AgentCommand {
+  name: string;
+  description?: string;
+  /** Placeholder for the free text the command takes after its name. */
+  hint?: string;
+}
+
+
+export interface PermissionOptionDTO {
+  optionId: string;
+  name: string;
+  kind: PermissionOptionKind;
+}
+
+export interface PermissionRequestDTO {
+  requestId: string;
+  conversationId: string;
+  title: string;
+  toolKind: ToolKind | null;
+  rawInput: unknown;
+  locations: ToolCallLocation[];
+  options: PermissionOptionDTO[];
+}
+
+export interface ElicitationRequestDTO {
+  requestId: string;
+  conversationId: string;
+  message: string;
+  requestedSchema: ElicitationSchema;
+}
+
 export type PendingRequestDTO =
-  | { type: "permission"; request: PermissionRequest }
-  | { type: "question"; request: QuestionRequest };
+  | { type: "permission"; request: PermissionRequestDTO }
+  | { type: "elicitation"; request: ElicitationRequestDTO };
+
+export type ElicitationReply =
+  | { action: "accept"; content: Record<string, unknown> }
+  | { action: "decline" }
+  | { action: "cancel" };
+
+
+export type Modality = "text" | "image" | "audio" | "video" | "pdf";
+export type AttachmentModality = Exclude<Modality, "text">;
+
+export interface ModelInfo {
+  providerId: string;
+  modelId: string;
+  name: string;
+  contextLimit: number | null;
+  cost: { input: number; output: number; cache_read?: number; cache_write?: number } | null;
+  reasoning: boolean;
+  toolCall: boolean;
+  input: Modality[];
+  output: Modality[];
+}
+
+/** Which attachment kinds a model accepts, for the composer's compatibility check. */
+export function acceptsModality(info: ModelInfo, modality: AttachmentModality): boolean {
+  return info.input.includes(modality);
+}
+
+export function fileModality(mimeType: string): AttachmentModality | null {
+  const mime = mimeType.toLowerCase();
+  if (mime.startsWith("audio/")) return "audio";
+  if (mime.startsWith("image/")) return "image";
+  if (mime.startsWith("video/")) return "video";
+  if (mime === "application/pdf") return "pdf";
+  return null;
+}
+
+export type McpServerConfig =
+  | {
+      type: "local";
+      command: string[];
+      environment?: Record<string, string>;
+      enabled?: boolean;
+    }
+  | {
+      type: "remote";
+      url: string;
+      headers?: Record<string, string>;
+      enabled?: boolean;
+    };
+
+export interface McpServerEntry {
+  name: string;
+  scope: "global" | "project";
+  config: McpServerConfig;
+}
+
+export interface SkillEntry {
+  name: string;
+  description: string;
+  content: string;
+  scope: "global" | "project";
+}
+
+export const MCP_NAME_PATTERN = /^[a-zA-Z0-9][a-zA-Z0-9_-]*$/;
+export const SKILL_NAME_PATTERN = /^[a-z0-9]+(-[a-z0-9]+)*$/;
+
+/** What an agent advertised at initialize; null until it has been started once. */
+export interface AgentCapabilitiesDTO {
+  fork: boolean;
+  resume: boolean;
+  list: boolean;
+  images: boolean;
+  mcpHttp: boolean;
+}
+
+export interface AgentStatusDTO {
+  agentId: AgentId;
+  name: string;
+  /** Executable resolved and spawnable. */
+  available: boolean;
+  running: boolean;
+  version: string | null;
+  /** Human instructions for out-of-band login, from the agent's authMethods. */
+  authHint: string | null;
+  envKeys: string[];
+  capabilities: AgentCapabilitiesDTO | null;
+}
+
 
 export interface MediaDTO {
   id: string;
@@ -74,6 +293,16 @@ export interface ListOutputFilesResponse {
 
 export type FileScope = "input" | "output";
 
+export function downloadFileUrl(
+  conversationId: string,
+  path: string,
+  scope: FileScope = "output",
+): string {
+  const encodedPath = path.split("/").map(encodeURIComponent).join("/");
+  return `/api/conversations/${encodeURIComponent(conversationId)}/files/${encodedPath}?scope=${scope}`;
+}
+
+
 export type PermissionAction = "allow" | "ask" | "deny";
 
 export const PERMISSION_TOOLS = [
@@ -88,6 +317,7 @@ export type PermissionTool = (typeof PERMISSION_TOOLS)[number];
 
 export type PermissionSettings = Record<PermissionTool, PermissionAction>;
 
+
 export interface UsageDay {
   day: string;
   cost: number;
@@ -96,8 +326,8 @@ export interface UsageDay {
 }
 
 export interface UsageModel {
-  providerID: string;
-  modelID: string;
+  agentId: string;
+  modelValue: string;
   cost: number;
   input: number;
   output: number;
@@ -129,37 +359,43 @@ export interface MessageSearchResult {
   time: number;
 }
 
-/**
- * Session-scoped OpenCode events forwarded over the message stream.
- * Only events the web client consumes are forwarded.
- */
-export const SERVER_EVENT_NAMES = [
-  "message.updated",
-  "message.removed",
-  "message.part.updated",
-  "message.part.delta",
-  "message.part.removed",
-  "permission.asked",
-  "permission.replied",
-  "question.asked",
-  "question.replied",
-  "question.rejected",
-  "session.updated",
-  "session.error",
-  "todo.updated",
-  "command.executed",
-] as const satisfies readonly Event["type"][];
 
-export type ServerEventName = (typeof SERVER_EVENT_NAMES)[number];
-export type SSEEventName = ServerEventName | "error";
+export interface StreamEventMap {
+  /** Full message snapshot upsert (user echo adoption, assistant creation). */
+  message: { message: MessageView };
+  /** Part snapshot upsert at a position within a message. */
+  part: { messageId: string; index: number; part: PartView };
+  /** Text append for a streaming text/reasoning part. */
+  delta: { messageId: string; partId: string; text: string };
+  /** Full plan replacement (transient, not persisted). */
+  plan: { entries: PlanEntry[] };
+  usage: SessionUsageDTO;
+  title: { title: string };
+  config: SessionConfigDTO;
+  commands: { commands: AgentCommand[] };
+  "request.asked": PendingRequestDTO;
+  "request.settled": { requestId: string };
+  "turn.end": { stopReason: StopReason; message: MessageView | null };
+  error: { message: string };
+}
 
-export type EventPayload<K extends ServerEventName> = Extract<
-  Event,
-  { type: K }
->["properties"];
+export type StreamEventName = keyof StreamEventMap;
 
-export type SSEEnvelope =
-  | {
-      [K in ServerEventName]: { id: string; event: K; data: EventPayload<K> };
-    }[ServerEventName]
-  | { id: string; event: "error"; data: { message: string } };
+export const STREAM_EVENT_NAMES = [
+  "message",
+  "part",
+  "delta",
+  "plan",
+  "usage",
+  "title",
+  "config",
+  "commands",
+  "request.asked",
+  "request.settled",
+  "turn.end",
+  "error",
+] as const satisfies readonly StreamEventName[];
+
+export type SSEEnvelope = {
+  [K in StreamEventName]: { id: string; event: K; data: StreamEventMap[K] };
+}[StreamEventName];

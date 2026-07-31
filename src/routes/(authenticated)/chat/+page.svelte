@@ -1,8 +1,10 @@
 <script lang="ts">
-  import { modelCatalog } from "$lib/state/providers.svelte";
+  import { agentCatalog } from "$lib/state/agents.svelte";
+  import { agentConfig } from "$lib/state/agent-config.svelte";
+  import { modelPrefs } from "$lib/state/model-prefs.svelte";
   import { startChat } from "$lib/state/start-chat";
   import { ThinkingOrb } from "$lib/components/ui/orb";
-  import type { ModelSelection } from "$lib/types";
+  import type { AgentId, SessionConfigDTO } from "$lib/contracts";
   import MessageInput from "$lib/components/chat/MessageInput.svelte";
   import CodeIcon from "@lucide/svelte/icons/code";
   import FileTextIcon from "@lucide/svelte/icons/file-text";
@@ -27,26 +29,50 @@
   })();
 
   let draft = $state("");
-  let selectedModel = $state<ModelSelection | null>(null);
+  let selectedAgent = $state<AgentId | null>(null);
+  let selectedOptions = $state<Record<string, string>>({});
 
   $effect(() => {
-    modelCatalog.loadDefault().then((model) => {
-      if (!selectedModel) selectedModel = model;
+    agentCatalog.loadDefault().then((agentId) => {
+      if (!selectedAgent) selectedAgent = agentId;
     });
   });
 
-  function handleModelChange(model: ModelSelection) {
-    selectedModel = model;
-    modelCatalog.remember(model);
-  }
+  $effect(() => {
+    const agentId = selectedAgent;
+    if (!agentId) return;
+    const remembered = modelPrefs.lastModelFor(agentId);
+    selectedOptions = remembered ? { model: remembered } : {};
+  });
 
-  const handleSend = (
-    text: string,
-    model: ModelSelection,
-    files?: File[],
-    mediaIds?: string[],
-    variant?: string,
-  ) => startChat(text, model, files, undefined, mediaIds, variant);
+  // The option set can depend on the model, so refetch whenever it changes.
+  $effect(() => {
+    const agentId = selectedAgent;
+    if (!agentId) return;
+    void agentConfig.load(agentId, selectedOptions.model);
+  });
+
+  // Choices made before the session exists are applied when it is created.
+  const composeConfig = $derived.by((): SessionConfigDTO | null => {
+    const config = selectedAgent
+      ? agentConfig.configFor(selectedAgent, selectedOptions.model)
+      : null;
+    if (!config) return null;
+    return {
+      ...config,
+      modes: null,
+      configOptions: config.configOptions.map((option) =>
+        option.type === "select" && selectedOptions[option.id]
+          ? { ...option, currentValue: selectedOptions[option.id] }
+          : option,
+      ),
+    };
+  });
+
+  const handleSend = (text: string, files?: File[], mediaIds?: string[]) =>
+    selectedAgent
+      ? startChat(text, selectedAgent, files, undefined, mediaIds, selectedOptions)
+      : Promise.resolve(false);
 </script>
 
 <div class="flex h-full flex-col items-center justify-center gap-8 px-4 pb-16 sm:px-8">
@@ -60,14 +86,24 @@
   <div class="w-full max-w-3xl">
     <MessageInput
       onSubmit={handleSend}
-      disabled={modelCatalog.loading}
+      disabled={agentCatalog.loading || !selectedAgent}
       placeholder="What are we working on?"
-      providers={modelCatalog.providers}
-      connectedProviders={modelCatalog.connected}
-      {selectedModel}
-      onModelChange={handleModelChange}
+      agentId={selectedAgent}
+      onAgentChange={(agentId) => (selectedAgent = agentId)}
+      config={composeConfig}
+      modelInfo={selectedAgent ? agentConfig.modelInfoFor(selectedAgent, selectedOptions.model) : {}}
+      onConfigChange={(configId, value) =>
+        (selectedOptions = { ...selectedOptions, [configId]: value })}
       bind:text={draft}
     />
+    {#if agentCatalog.error}
+      <p class="mt-2 text-center text-sm text-destructive">{agentCatalog.error}</p>
+    {:else if !agentCatalog.loading && agentCatalog.agents.every((agent) => !agent.available)}
+      <p class="mt-2 text-center text-sm text-muted-foreground">
+        No agents installed. Add one from
+        <a href="/settings/agents" class="underline hover:text-foreground">Settings → Agents</a>.
+      </p>
+    {/if}
   </div>
 
   <div class="flex max-w-xl flex-wrap items-center justify-center gap-2">
