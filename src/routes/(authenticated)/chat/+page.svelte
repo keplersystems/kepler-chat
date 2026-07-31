@@ -44,7 +44,7 @@
       .chatMode ?? true,
   );
   $effect(() => {
-    if (!chatModeAvailable && selectedMode === "chat") selectedMode = "agent";
+    if (!chatModeAvailable && selectedMode === "chat") selectedMode = "work";
   });
 
   $effect(() => {

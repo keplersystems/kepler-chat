@@ -41,7 +41,7 @@ export const conversation = sqliteTable(
   {
     id: text("id").primaryKey(),
     agent_id: text("agent_id", { enum: AGENT_IDS }).notNull(),
-    mode: text("mode", { enum: CONVERSATION_MODES }).notNull().default("agent"),
+    mode: text("mode", { enum: CONVERSATION_MODES }).notNull().default("work"),
     engine_session_id: text("engine_session_id"),
     /** JSON {sessionId, anchor?}: deferred fork consumed on the next turn (claude). */
     fork_pending: text("fork_pending"),

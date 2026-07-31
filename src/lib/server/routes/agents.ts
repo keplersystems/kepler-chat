@@ -34,7 +34,7 @@ export const agentsRoute = new Elysia({ prefix: "/api/agents" })
     async (context) => {
       requireAuth(context);
       const agentId = requireAgentId(context.params.agentId);
-      const config = await driverFor(agentId).agentConfig("agent", context.query.model || undefined);
+      const config = await driverFor(agentId).agentConfig("work", context.query.model || undefined);
       return { config, modelInfo: await modelInfoForConfig(agentId, config) };
     },
     {

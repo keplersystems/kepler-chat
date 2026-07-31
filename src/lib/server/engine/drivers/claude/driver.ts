@@ -60,7 +60,8 @@ const MODEL_VALUES = ["default", "opus", "sonnet", "haiku"];
 const EFFORT_VALUES = ["low", "medium", "high", "xhigh", "max"] as const;
 type EffortValue = (typeof EFFORT_VALUES)[number];
 
-const CHAT_TOOLS = ["WebSearch", "WebFetch"];
+/** Read is scoped by permissions to the conversation root; Skill needs it. */
+const CHAT_TOOLS = ["WebSearch", "WebFetch", "Skill", "Read"];
 
 interface ForkPending {
   sessionId: string;
@@ -165,7 +166,7 @@ async function buildContent(
     blocks.push({
       type: "text",
       text:
-        mode === "agent"
+        mode === "work"
           ? `Attached file at ./input/${attachment.relativePath}`
           : `Attachment ${attachment.filename} could not be inlined (unsupported type).`,
     });
@@ -347,13 +348,22 @@ export function createClaudeDriver(): EngineDriver {
         : null;
 
       const agentEnv = await loadAgentEnv("claude");
+      const mcpServers = await resolveClaudeMcpServers(conv.project_id);
+      // "project" settings load the conversation root's materialized
+      // instructions and skills without pulling in ~/.claude user config.
       const modeOptions: Partial<Options> =
         conv.mode === "chat"
-          ? { tools: CHAT_TOOLS, systemPrompt: CHAT_SYSTEM_PROMPT, settingSources: [] }
+          ? {
+              tools: CHAT_TOOLS,
+              systemPrompt: CHAT_SYSTEM_PROMPT,
+              settingSources: ["project"],
+              skills: "all",
+              mcpServers,
+            }
           : {
               systemPrompt: { type: "preset", preset: "claude_code" },
               settingSources: ["project"],
-              mcpServers: await resolveClaudeMcpServers(conv.project_id),
+              mcpServers,
             };
 
       const content = await buildContent(input, conv.mode);

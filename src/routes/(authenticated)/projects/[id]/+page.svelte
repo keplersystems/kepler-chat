@@ -70,7 +70,7 @@
 
   const handleSend = (text: string, files?: File[], mediaIds?: string[]) =>
     selectedAgent
-      ? startChat(text, selectedAgent, "agent", files, data.project.id, mediaIds)
+      ? startChat(text, selectedAgent, "work", files, data.project.id, mediaIds)
       : Promise.resolve(false);
 
   function startRename() {

@@ -1,6 +1,7 @@
 <script lang="ts">
   import type { MarkedToken, Token, Tokens } from "$lib/markdown/lex";
   import CodeBlock from "./CodeBlock.svelte";
+  import InlineVisual from "./InlineVisual.svelte";
   import Self from "./MarkdownTokens.svelte";
 
   let { tokens }: { tokens: Token[] } = $props();
@@ -32,7 +33,11 @@
   {:else if t.type === "codespan"}
     <code>{t.text}</code>
   {:else if t.type === "code"}
-    <CodeBlock code={t.text} lang={t.lang ?? ""} />
+    {#if (t.lang ?? "") === "html"}
+      <InlineVisual code={t.text} />
+    {:else}
+      <CodeBlock code={t.text} lang={t.lang ?? ""} />
+    {/if}
   {:else if t.type === "link"}
     {#if isSafeHref(t.href)}
       <a href={t.href} target="_blank" rel="noopener noreferrer" title={t.title ?? undefined}>

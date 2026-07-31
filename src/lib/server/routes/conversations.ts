@@ -33,7 +33,7 @@ export const conversationsRoute = new Elysia({ prefix: "/api/conversations" })
       requireAuth(context);
       return createConversation(
         context.body.agentId,
-        context.body.mode ?? "agent",
+        context.body.mode ?? "work",
         context.body.title,
         context.body.projectId ?? null,
         context.body.configOptions ?? {},

@@ -91,7 +91,7 @@ export const STOP_REASONS = [
 ] as const satisfies readonly StopReason[];
 export type AgentId = (typeof AGENT_IDS)[number];
 
-export const CONVERSATION_MODES = ["chat", "agent"] as const;
+export const CONVERSATION_MODES = ["chat", "work"] as const;
 export type ConversationMode = (typeof CONVERSATION_MODES)[number];
 
 export interface ConversationDTO {

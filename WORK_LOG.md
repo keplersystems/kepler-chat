@@ -1,5 +1,61 @@
 # Work Log
 
+## 2026-07-31 — Native multi-SDK engine migration (in progress)
+
+ACP proved to be a lowest-common-denominator: every feature lost in the ACP
+migration (revert, edit, branch-at-message, MCP status, model catalogs) died at
+the protocol boundary, not in the engines. Decision (user): drop ACP entirely,
+integrate claude/codex/opencode through native SDKs behind an `EngineDriver`
+interface, and give every conversation an immutable mode — **chat**
+(conversational, web search/fetch only, custom prompt) or **agent** (full
+coding agent). Plan at ~/.claude/plans/replicated-juggling-hollerith.md.
+
+**ACP state preserved on branch `acp-engine` (pushed, commit 82aed6a).**
+
+Progress:
+- Phase 1 probes (all PASS, scripts in session scratchpad): claude-agent-sdk
+  under Bun with `resume`+`forkSession`+`resumeSessionAt` fork-truncation, incl.
+  cross-cwd after copying the transcript jsonl into the target cwd's
+  `~/.claude/projects/<encoded-cwd>/` dir; `tools:["WebSearch","WebFetch"]`
+  really strips Bash. codex app-server JSON-RPC (initialize → thread/start
+  read-only/never → deltas → thread/fork lastTurnId → model/list; official TS
+  bindings via `codex app-server generate-ts`). opencode `OPENCODE_CONFIG_CONTENT`
+  chat agent (`permission:{"*":"deny",websearch/webfetch allow}` strips tools
+  from the schema; custom `prompt` replaces the coding system prompt),
+  fork(messageID) + revert truncation verified. opencode per-session SSE URL
+  still unresolved (blocking prompt API works; driver agent investigating).
+- Contracts are fully Kepler-owned (8 ACP type re-exports re-declared), DB:
+  `acp_session_id`→`engine_session_id`, `conversation.mode`,
+  `message.engine_message_id`, `conversation.fork_pending` (deferred claude
+  forks ride the next prompt — probe-verified pattern), migrations 0004-0006.
+- Engine layer: `engine/types.ts` (EngineDriver + TurnSink + rewindTo),
+  `engine/core/` (stream-hub/requests/catalog/env-profiles/sandbox moved from
+  acp/ + turn-runner extracted from pump.ts + session-config-store),
+  `engine/registry.ts`. `src/lib/server/acp/` deleted, @agentclientprotocol
+  deps removed.
+- Claude driver (drivers/claude/) LIVE-VERIFIED end-to-end through the app:
+  chat-mode turn with streamed reasoning/text deltas, per-turn cost/tokens,
+  engineMessageId capture, resume continuity, branch-at-message (deferred fork
+  consumed on first branch turn; truncation confirmed: branch knew GREEN not
+  FOX), regenerate and edit endpoints (rewind = fork-truncate + resend;
+  edit test: GREEN/OWL, FOX gone). Chat mode sets `settingSources: []` —
+  without it the user-level CLAUDE.md leaked into chat conversations.
+- Edit/regenerate: `server/rewind.ts` (shared rewind-for-resend), endpoints
+  `POST /:id/messages/:messageId/{edit,regenerate}`, branch takes
+  `{atMessageId?}`. Session modes (`PUT /:id/mode`) removed — conversation
+  mode replaced them.
+- UI: chat/agent segmented toggle in the composer (locked to agent when the
+  engine lacks chatMode), MessageBubble actions restored with real semantics
+  (Edit & rerun from here / Regenerate / Branch from here), gated on
+  `SessionConfigDTO.capabilities` + per-message `engineMessageId`.
+- Codex + OpenCode drivers being built by parallel subagents against the same
+  interface (specs include probe results; they don't touch registry.ts — wire
+  their factories into engine/registry.ts when they land).
+
+Remaining: wire codex/opencode factories, full Phase 9 verification matrix
+(per engine per mode: send/stream, edit, regenerate, branch, permissions,
+cancel, reattach), browser pass, agent-mode claude spot-check.
+
 ## 2026-07-31 — Edit and "Ask again" removed (honesty follow-up)
 
 The earlier honesty pass reframed Edit as "send a correction as a new turn" and

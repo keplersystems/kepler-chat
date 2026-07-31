@@ -376,7 +376,7 @@ import { acceptsModality, fileModality, type ModelInfo } from '$lib/contracts';
             role="radiogroup"
             aria-label="Conversation mode"
           >
-            {#each ["chat", "agent"] as const as value (value)}
+            {#each ["chat", "work"] as const as value (value)}
               {@const locked = value === "chat" && !chatModeAvailable}
               <button
                 type="button"
