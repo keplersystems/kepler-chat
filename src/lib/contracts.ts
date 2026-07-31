@@ -100,6 +100,8 @@ export interface ConversationDTO {
   mode: ConversationMode;
   project_id: string | null;
   title: string;
+  /** Non-null while a public read-only link is live. */
+  share_token: string | null;
   created_at: Date;
   updated_at: Date;
 }
@@ -139,6 +141,8 @@ export type PartView =
       url: string;
       filename: string;
       mimeType?: string;
+      /** Text files only; lets the chip say how much there is to read. */
+      lines?: number;
     };
 
 export interface TurnTokens {

@@ -57,6 +57,13 @@
       "when": 1785504595481,
       "tag": "0007_work-mode",
       "breakpoints": true
+    },
+    {
+      "idx": 8,
+      "version": "6",
+      "when": 1785522014364,
+      "tag": "0008_share-token",
+      "breakpoints": true
     }
   ]
 }

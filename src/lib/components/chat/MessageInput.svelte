@@ -72,6 +72,26 @@ import { acceptsModality, fileModality, type ModelInfo } from '$lib/contracts';
 
   const MAX_TEXTAREA_HEIGHT = 240;
 
+  let modeGroup = $state<HTMLElement | null>(null);
+  let pillPlaced = false;
+
+  // The pill tweens between measured positions; on first paint it must snap,
+  // or it slides in from the left edge on every mount.
+  $effect(() => {
+    void mode;
+    const pill = modeGroup?.querySelector<HTMLElement>(".t-tabs-pill");
+    const active = modeGroup?.querySelector<HTMLElement>('[aria-checked="true"]');
+    if (!pill || !active) return;
+    if (!pillPlaced) pill.style.transition = "none";
+    pill.style.transform = `translateX(${active.offsetLeft}px)`;
+    pill.style.width = `${active.offsetWidth}px`;
+    if (!pillPlaced) {
+      void pill.offsetWidth;
+      pill.style.transition = "";
+      pillPlaced = true;
+    }
+  });
+
   let files: File[] = $state([]);
   let libraryItems: MediaDTO[] = $state([]);
   let libraryOpen = $state(false);
@@ -372,10 +392,12 @@ import { acceptsModality, fileModality, type ModelInfo } from '$lib/contracts';
 
         {#if onModeSelect && mode}
           <div
-            class="flex shrink-0 items-center rounded-lg bg-muted/60 p-0.5 text-xs"
+            bind:this={modeGroup}
+            class="t-tabs flex shrink-0 items-center rounded-lg bg-muted/60 p-0.5 text-xs"
             role="radiogroup"
             aria-label="Conversation mode"
           >
+            <span class="t-tabs-pill" aria-hidden="true"></span>
             {#each ["chat", "work"] as const as value (value)}
               {@const locked = value === "chat" && !chatModeAvailable}
               <button
@@ -385,8 +407,9 @@ import { acceptsModality, fileModality, type ModelInfo } from '$lib/contracts';
                 disabled={disabled || locked}
                 title={locked ? "This agent has no chat mode" : undefined}
                 onclick={() => onModeSelect?.(value)}
-                class="rounded-md px-2 py-1 capitalize transition-colors {mode === value
-                  ? 'bg-background text-foreground shadow-xs'
+                class="relative z-10 rounded-md px-2 py-1 capitalize transition-colors {mode ===
+                value
+                  ? 'text-foreground'
                   : 'text-muted-foreground hover:text-foreground'} disabled:opacity-40"
               >
                 {value}

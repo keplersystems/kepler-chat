@@ -1,6 +1,367 @@
 # Work Log
 
-## 2026-07-31 — Native migration COMPLETE except final browser pass (HANDOFF)
+## 2026-07-31 — Share links, header actions
+
+Header now carries branch, the generated-files toggle, and Share, top right per
+the user's reference. The files panel lost its own collapsed rail, since the
+header owns that toggle now; collapsed is `w-0` rather than a 12-wide stub.
+
+**Share is a public read-only link** (user's choice among export / public link /
+copy-as-text). Migration 0008 adds `conversation.share_token`, unique and
+nullable. Sharing mints a 42-char token rather than exposing the conversation
+id, so a shared URL cannot be walked back to the authenticated routes, and it is
+idempotent: re-sharing returns the link already in circulation.
+`/share/[token]` is exempted from the auth gate in hooks.server.ts and reads the
+database directly, since these requests carry no session.
+
+Attachments needed their own route or the feature would have been a lie: the
+transcript rendered but every Download and every media preview answered 401.
+`/share/[token]/files/[...path]` serves them through the same
+`resolveExistingSafeFilePath` guard, and the page loader rewrites file part urls
+from the authenticated prefix to the token-scoped one.
+
+Sharing is revocable from the header: once shared the button reads "Shared" and
+opens a menu with Copy link / Stop sharing. State comes from
+`ConversationDTO.share_token`, so it survives a reload rather than living only
+in component state.
+
+Verified: unauthenticated fetch of a share link renders the transcript; bad
+token 404s; `/chat/:id` still 303s to login; encoded traversal
+(`..%2f..%2f..%2fetc%2fpasswd`, and via a legitimate `output/` prefix) all 400.
+Revoking nulls the token, and the old link's page and files both go to 404;
+re-sharing afterwards mints a fresh token rather than resurrecting the revoked
+one, so a leaked link stays dead.
+
+**Bug caught by that work:** the generated-file parts I added earlier built urls
+from output-directory-relative paths, but the download route resolves the
+`output` scope against the conversation *root*, so every Download 404'd. Paths
+are now root-relative (`output/second.txt`), matching the listing route.
+Verified 200 both authenticated and through a share link.
+
+## 2026-07-31 — Attachment mime normalised; file cards both sides
+
+**One bad upload used to brick a conversation.** `resolveAttachments` preferred
+the browser's mime over Kepler's own lookup, and Linux's shared-mime-info calls
+a `.tsx` a Tiled tileset (`application/x-tiled-tsx`). Gemini rejects it, the
+rejected part stays in the transcript, and every later turn replays it, so a
+message with no attachment at all still failed. Now a mime is only relayed when
+it names a modality the model can act on; otherwise Kepler reads the first 4KB
+and says what the bytes are, `text/plain` or `application/octet-stream`.
+Verified: the part reaches opencode as `mime: text/plain`.
+
+**Uploads 500'd after the crash.** Uploads dedupe by content hash and hardlink
+from the media library, which lives under the sessions root (tmpfs in dev), so
+a reboot left rows whose bytes were gone and `link()` threw ENOENT. Every file
+uploaded before the reboot failed to re-upload, silently, with the send never
+starting. `saveToLibrary` now rewrites the bytes when a dedupe hit has lost its
+file, and a genuinely missing library file returns 410 rather than a raw 500.
+
+**File parts render per side.** User attachments get the compact tile (filename,
+line count, extension badge); the agent's own files get the wide card with a
+Download, where downloading is the point. Line counts are computed for text
+attachments during the same pass that decides the mime.
+
+**Agent-written files now appear in the reply.** They existed only in the
+Generated Files sidebar, unattributed to any turn. The runner snapshots the
+output dir before the turn and diffs it after, keyed by size and mtime, and
+emits a file part per new or rewritten file. The sidebar is unchanged and both
+show the file.
+
+Verified end to end: `colors.md` renders as `4 lines / MD` on the user message,
+and a Claude work turn writing `palette.txt` shows `Text · TXT` with Download
+inline plus `Generated Files (1)` in the sidebar.
+
+## 2026-07-31 — File parts render as previews, not chips
+
+Every non-image attachment used to be one small monospace download chip.
+FileChip now switches on `fileModality` (already in contracts):
+- image: unchanged, but wrapped in a link so it opens full size
+- audio: inline `<audio controls>`; this is what the transcription flow needed
+- video: inline `<video controls>`, poster and duration from `preload=metadata`
+- everything else: the card from the user's reference, an icon tile plus
+  filename, `Kind · EXT`, and a Download button
+
+Kind comes off the extension, not the mime type: mime goes vague
+(`application/octet-stream`) exactly where the label would matter, and nothing
+upstream describes what a file is to a reader.
+
+Media captions are download links, so the affordance the old chip always had
+survives a codec the browser cannot decode.
+
+Verified in browser on a conversation carrying all four: png, mkv (poster and
+0:14 duration), m4a, and a .tsx uploaded to check the card (icon, name,
+`Code · TSX`, Download).
+
+Observed while testing, not fixed: the browser typed that .tsx as
+`application/x-tiled-tsx` and Gemini rejected the turn with "Unsupported MIME
+type". Kepler passes the browser's mime straight through; text-ish uploads with
+odd mime types will keep failing until that is normalised.
+
+## 2026-07-31 — UI taste pass against references/
+
+Compared references/ClaudeSite (claude.ai captures), references/transitions.dev
+and references/thinking-orbs against Kepler's current screens.
+
+**Settings de-boxed.** Both claude.ai captures use the same discipline: label +
+muted description left, control hard-right, sections separated by whitespace and
+one hairline, and a border only where it means something (their one bordered
+card marks a *dependent* setting). Kepler wrapped every agent in its own
+`rounded-xl border bg-card` with a second inner divider. Now `divide-y` sections
+with `py-6`; the env-var block lost its redundant `border-t`. Same instinct as
+the tool-card cleanup: the boxes carried no information.
+
+**Versioned model labels.** claude.ai's composer reads "Sonnet 4.5"; Kepler read
+"Sonnet", because that is the SDK's `displayName`. `versionedName()` derives the
+version from `resolvedModel` (structured, not prose): strip `claude-` and the
+`[1m]` marker, take numeric segments of one or two digits (excludes the
+`-20251001` date stamp on haiku). Applied only when displayName is exactly the
+family name, so "Opus (1M context)" and "Default (recommended)" keep their own
+wording. Live: Fable 5 / Sonnet 5 / Haiku 4.5, composer chip reads "Sonnet 5".
+
+**Orb states now communicate.** thinking-orbs ships six verbs; Kepler used four
+and showed `working` for everything in ActivityTrail, including while a web
+search ran, and while assistant text streamed. The trail's label and orb now
+come from one `running` tuple so the animation cannot disagree with the words
+(searching / solving / working); streaming assistant text uses `composing`,
+previously unused; ToolCallCard picks `searching` for fetch/read kinds.
+
+**One live orb per message.** User caught two spinners racing in one message:
+the trail's ("Searching the web…") and the message-level one below it.
+MessageBubble rendered its orb on `streaming` unconditionally, so it doubled up
+with whichever child was already indicating activity — pre-existing, but the
+trail made it obvious. It now yields when the last block is a live trail or a
+live reasoning block, both of which already show an orb *and* say what they are
+doing. Verified live: one canvas in `main` during a search (the other is the
+sidebar's per-conversation generating dot, a different surface).
+
+**New-chat screen: orb replaced by a Kepler mark, greeting became the hero.**
+The generic dotted orb was doing no work there. Now `ui/KeplerMark.svelte`, and
+the greeting is large serif sentence-case instead of a mono all-caps caption.
+Same lockup on login, above the wordmark.
+
+The mark is the real Kepler-16 system, drawn to the proportions in the NASA
+diagram the user supplied: three face-on circles, each star on its own orbit.
+- Radii derive from the actual system rather than being eyeballed: separation
+  0.22 AU against the planet's 0.70 AU, split by the 0.69/0.20 M☉ mass ratio so
+  the heavier star takes the tighter path. Gives rB/rA 3.45 and planet/rB 4.13,
+  against ~3.0 and ~3.4 measured off the reference.
+- Binary spins 229/41 faster than the planet, the real period ratio, so the
+  relative motion is right without tuning.
+- Hovering shows one of five facts about the system, cycling per hover.
+- Two earlier geometries were wrong and got thrown away: a focus-offset
+  eccentric orbit (the planet flew straight through the stars at perihelion),
+  then a tilted near-circular one (better, but the pair still read as a single
+  smudge because they overlapped).
+- Geometry and viewBox are computed once at module scope; both animations bail
+  under `prefers-reduced-motion`.
+
+Dead end worth recording: asked what to do about the orb, I first made it static
+via a `still` prop, then swapped orb states. Both were misreads — the ask was to
+replace the element, not restyle it. `still` was fully reverted, no dead code.
+
+**Motion: only one of the three proposals was real.**
+- `tabs-sliding` added for the Chat|Work toggle: a `.t-tabs-pill` that JS
+  measures and CSS tweens, using Kepler's existing `--duration-fast` /
+  `--ease-smooth-out` (which already equal the snippet's own defaults) rather
+  than importing `--tabs-*`. Kept `role="radio"`, not the snippet's `tablist`:
+  it selects a mode, it does not switch panels. First paint snaps with
+  transition suspended so it does not slide in from the left on mount.
+- `menu-dropdown` was **already vendored as `t-pop`** (its variables are
+  literally `--dropdown-*`) and already applied to select content with the
+  right transform-origin. Nothing to do; I had missed it because the class name
+  differs from the snippet name.
+- `panel-reveal` **rejected**. ActivityTrail, ReasoningBlock and ToolCallCard
+  are sibling disclosures in the same message stream and all use
+  `animate-collapsible-*`. Giving one of the three its own reveal would be the
+  ad-hoc inconsistency this pass is removing.
+- `spinning-counter` rejected earlier for the token counters: its own doc calls
+  it fanfare for "a jackpot roll", and streaming token counts are ambient state.
+
+Verified in browser on the user's own instance (:5173): pill slides and resizes
+(translateX 2px/41px → 44px/45px with transform+width transitions), de-boxed
+settings, versioned names in menu and chip, and "Searching the web…" live during
+a search turn (same tuple as the orb state). svelte-check 0 errors / 2476 files,
+vite build clean.
+
+Note: `bun x vite dev --port 5199` now fails with ENOSPC (inotify watcher limit,
+135353 max) after this session's repeated restarts; the user's own :5173 server
+is the one to use.
+
+## 2026-07-31 — Same treatment for codex; claude helpers collapsed
+
+User: do the other SDKs too, nothing hardcoded, and the claude code was
+fragmented into trivial functions and if/else chains. Both fair.
+
+**Codex** was already catalog-driven from `model/list` but threw away most of
+what the protocol reports:
+- `FALLBACK_EFFORTS = ["low","medium","high"]` stood in whenever a model
+  reported none. Gone. Codex actually advertises **six** levels per model with
+  a `description` each, so the fallback was hiding Xhigh, Max and **Ultra**
+  behind three invented ones. The effort option is now built from
+  `supportedReasoningEfforts` (value + description) and omitted entirely when a
+  model has none, same rule as claude.
+- `defaultReasoningEffort` was only a last-resort `??`; it is now the real
+  default whenever the stored choice is no longer advertised.
+- `Model.hidden` was never checked, so models codex marks hidden were listed.
+- `APPROVAL_OPTIONS` restated the protocol's decision ids, and both call sites
+  restated them again as inline casts. One `ApprovalDecision` type now derives
+  from the generated bindings
+  (`Extract<CommandExecutionApprovalDecision, string> & FileChangeApprovalDecision`)
+  and the array is pinned with `satisfies`, so a protocol rename is a build
+  error rather than a runtime surprise.
+
+**OpenCode** needed nothing: its models, groups and variants already come from
+the models.dev catalog. Its remaining literals are tool-name → `ToolKind`
+translation, not a mirrored catalog.
+
+**Claude** cleanup: `modelFor` / `effortsFor` / `resolveEffort` (three functions,
+two if-chains, overlapping work) collapsed into one `selection()` returning the
+row, its ladder and the effort to send. `STALE_MODEL` and `optionLabel` moved to
+session-config-store now that both drivers use them.
+
+Deliberately left alone, since they are Kepler's own decisions rather than
+mirrored SDK state: `CHAT_TOOLS` (what chat mode grants), the tool-kind name
+maps, and the `["model","effort"]` id check.
+
+Verified live: codex lists five models with descriptions and six efforts with
+theirs, default lands on the model's own `defaultReasoningEffort` (Medium), and
+a codex turn completes. svelte-check 0 errors / 2476 files, vite build clean.
+
+## 2026-07-31 — Claude model list comes from the CLI, not from constants
+
+The picker showed "Opus"/"Sonnet"/"Haiku" because the driver carried
+`MODEL_VALUES = ["default","opus","sonnet","haiku"]` and `EFFORT_VALUES`.
+User: nothing hardcoded, it breaks between versions. They were right twice over
+— the list had already gone stale (no **Fable** at all, and plain `opus` where
+the CLI now lists `opus[1m]`).
+
+`query().supportedModels()` returns the real catalog: `value`, `displayName`,
+`description` (carries the version — "Opus 5 with 1M context", "Haiku 4.5"),
+`resolvedModel`, and per-model `supportedEffortLevels`. Probed first: it answers
+in ~1.2s over the control protocol with **no turn and no tokens** if the prompt
+generator never yields, so `loadModels()` spawns an idle query against
+`getProbeRoot("claude")` and aborts it in a `finally` (verified: no orphan CLI
+process under the dev server). Cached promise cleared on failure, mirroring the
+codex driver's `loadModels`.
+
+Every hardcoded list is gone; `EffortLevel`/`ModelInfo` are imported from the
+SDK rather than redeclared. Consequences:
+- Fable now appears; descriptions carry the versions the user asked for.
+- Reasoning effort is derived per model, so it **disappears for Haiku** (which
+  advertises no ladder) instead of offering a control that does nothing. The
+  default is the middle rung of whatever the model advertises, which lands on
+  "high" for the 5-level ladder — same behaviour as before, now derived.
+- No effort is sent on turns for models without one.
+- A conversation holding a value the CLI stopped listing (one row still on
+  `opus`) keeps it as a visible "No longer listed" option instead of rendering
+  blank or silently reading as another model. Matching uses `resolvedModel`,
+  which exists for exactly this.
+- Catalog failure no longer has a fabricated fallback to hide behind; it
+  propagates and the cache clears so the next call retries.
+
+Verified in browser after a dev-server restart (the config cache is per-process,
+so the old list survived HMR): all five models with versioned subtitles, effort
+present on Opus and absent on Haiku, and a live Haiku turn completing with no
+effort sent. svelte-check 0 errors / 2476 files, vite build clean.
+
+## 2026-07-31 — Chat-mode tool calls become one activity trail
+
+User: the per-call tool cards are "ad-hoc for a chat view", and showed the
+claude.ai research-trail reference (summary line → rail of steps → search
+results as an inner scrollable card → Done). Five stacked bordered boxes each
+repeating a raw tool name and DONE became two quiet summary lines.
+
+Decisions taken with the user: **chat mode only** (work keeps ToolCallCard,
+which carries diffs, file locations and permission detail a compact trail would
+bury), and **monogram chips instead of favicons** — no favicon service, no
+per-domain requests, nothing leaks; the domain seeds a stable hue so a source
+keeps its colour across messages.
+
+- `lib/search-results.ts` — results are not structured on the wire, so this
+  parses the two shapes engines actually emit: Claude's `Links: [{title,url}]`
+  JSON blob and Exa/opencode's `Title:`/`URL:` stanzas. An unrecognised shape
+  yields nothing rather than a guess, and the step degrades to its plain title.
+- `chat/parts/ActivityTrail.svelte` — collapsible run of reasoning + tool steps
+  on a vertical rail; search steps show the query, `N results`, and a scrollable
+  card of title/domain rows linking out; other steps show the one detail worth
+  seeing (url/query/path from rawInput or locations); failures show their real
+  error text; terminates with Done. Auto-expands while live and collapses when
+  the run ends, unless the user takes over the toggle (matches ReasoningBlock).
+- `MessageBubble` groups consecutive reasoning|tool parts into one trail in chat
+  mode; assistant prose still breaks the run, so the answer never hides inside a
+  collapsed block. `mode` threads chat page → MessageList → MessageBubble.
+
+Verified in browser: collapsed summaries ("Read 2 files · Used a tool",
+"Searched the web 2 times"), expanded rail with both searches and their result
+lists, inner card scrolls at max-height, live streaming (steps appear as they
+run, orb while active) then auto-collapse on completion, permission dialog
+mid-run, light and dark, work mode still rendering per-call cards.
+svelte-check 0 errors / 2476 files, vite build clean.
+
+## 2026-07-31 — Browser pass done; two real bugs found and fixed
+
+The browser pass the previous entry deferred. Both pending items are now closed
+and every finding below was caught in the browser, not by the API matrix — the
+matrix drives endpoints sequentially and structurally cannot hit either bug.
+
+**BUG 1 (visuals, user-visible): inline charts never rendered.** The theme
+bridge injected Kepler's raw oklch token values into the frame. Generated
+visuals build translucent shades by concatenating a hex suffix
+(`colSuccess + '33'`), which is valid for hex and throws
+`SyntaxError: could not be parsed as a color` on oklch. The throw lands inside
+Chart.js's scriptable `backgroundColor` during draw, so the chart silently
+painted nothing while the surrounding tiles and sliders kept working — which is
+exactly why it looked like a CDN/CSP problem. It is not: CSP, sandbox flags, and
+insertion order were each cleared by a controlled 3-path harness, and the
+downloaded claude.ai artifact uses hex exclusively (zero oklch), confirming the
+format models assume. Fix: `InlineVisual.toHex()` flattens each token over the
+app background to opaque sRGB hex via a 1x1 canvas, so gamut mapping and alpha
+compositing are the browser's job; non-colors (`--radius`) pass through.
+Verified in dark and light, sliders drive live chart updates.
+
+**BUG 2 (every new OpenCode/Codex conversation): first turn failed with
+"Conversation has no OpenCode session".** `ensureSession` deduped concurrent
+establishment per conversation id, but the config route, commands route, and
+turn runner each hold their own `ConversationRow` object. Only the winner's row
+received the in-place session write; a follower awaited the shared promise and
+then ran the turn against its own row, still null. On a new chat the config
+route and the turn runner race by construction, so this reproduced on every
+fresh conversation (2/2) and never once in the API matrix. Fix:
+`createSessionEstablisher()` in engine/core/session-config-store.ts — followers
+reload the session columns after awaiting. Codex had the identical pattern and
+now shares the helper; Claude was never affected (it captures its session id
+during the turn). Verified: fresh OpenCode conversations now stream normally.
+
+Also fixed while sweeping: agent versions rendered as `vunknown` (Claude — the
+SDK's `exports` map omits `./package.json`, so the require threw under Vite SSR
+and the catch masked it; now read beside the resolved entry) and
+`vcodex-cli 0.145.0` (Codex — `codex --version` prints the binary name; now
+matched to the number). Settings shows `v1.18.10 | v0.3.220 | v0.145.0`.
+
+**Verified in-browser:** InlineVisual renders (iframe `allow-scripts` only,
+657px via the postMessage height bridge, theme-matched in both themes, sliders
+recalculate tiles and redraw the chart); Chat|Work toggle with radio semantics;
+message actions correctly split (Copy+Edit on user, Copy+Regenerate+Branch on
+assistant); agent picker lists all three; **OpenCode work-mode permission
+round-trip** (websearch is `ask` by default → dialog with tool input and
+Allow/Always allow/Reject → Allow → Exa search ran → answer returned) — this was
+the other pending item; agents settings page; Generated Files panel; zero
+console errors throughout. svelte-check 0 errors / 2473 files, vite build clean.
+
+Not a bug: a chat-mode `webfetch FAILED` card was the model calling webfetch
+with `file:///dev/null`; OpenCode rejected it and the card showed the real
+reason. Chat-mode tool envelope is correct — the model reported having only
+skill/websearch/webfetch and no write tool.
+
+**NEXT**
+1. Remaining known gaps unchanged: project-scope MCP for opencode, codex has no
+   slash commands, visuals quality on deepseek/gpt models unassessed.
+2. Watch item unchanged: the single unreproduced claude/work branch-anchor flake.
+3. Branch is ready to merge to main.
+4. Unrelated: /tmp tmpfs is under quota pressure (7.7G, ~76% used); the bulk is
+   another project's scratch dir, left untouched.
+
+## 2026-07-31 — Native migration COMPLETE except final browser pass (superseded by entry above)
 
 All three native drivers are LIVE, wired, and matrix-verified on branch
 `sdk-engines` (pushed, head 8be2a7c). ACP is deleted; its state is preserved on

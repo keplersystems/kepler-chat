@@ -24,7 +24,9 @@ import type {
     type LoadedSessionConfig,
   } from "$lib/state/session-config.svelte";
   import { modelPrefs } from "$lib/state/model-prefs.svelte";
+  import * as DropdownMenu from "$lib/components/ui/dropdown-menu";
   import * as Tooltip from "$lib/components/ui/tooltip";
+  import FileTextIcon from "@lucide/svelte/icons/file-text";
   import GitBranchIcon from "@lucide/svelte/icons/git-branch";
   import MessageList from "$lib/components/chat/MessageList.svelte";
   import MessageInput from "$lib/components/chat/MessageInput.svelte";
@@ -48,6 +50,46 @@ import type {
   let composer = $state<MessageInput | null>(null);
   let outputFiles = $state<FileEntryDTO[]>([]);
   let isFilesPanelCollapsed = $state(false);
+  let shareToken = $state<string | null>(null);
+  let shareLabel = $state("Share");
+
+  $effect(() => {
+    shareToken = data.conversation.share_token;
+  });
+
+  function flashShareLabel(text: string) {
+    shareLabel = text;
+    setTimeout(() => (shareLabel = "Share"), 2000);
+  }
+
+  async function copyLink(token: string) {
+    await navigator.clipboard.writeText(`${location.origin}/share/${token}`);
+    flashShareLabel("Link copied");
+  }
+
+  async function startSharing() {
+    const { data: shared, error: shareError } = await api.api
+      .conversations({ id: conversationId })
+      .share.post();
+    if (shareError || !shared || !("token" in shared)) {
+      chat.setError("Failed to create share link");
+      return;
+    }
+    shareToken = shared.token;
+    await copyLink(shared.token);
+  }
+
+  async function stopSharing() {
+    const { error: shareError } = await api.api
+      .conversations({ id: conversationId })
+      .share.delete();
+    if (shareError) {
+      chat.setError("Failed to stop sharing");
+      return;
+    }
+    shareToken = null;
+    flashShareLabel("Sharing stopped");
+  }
   let liveTitle = $state<string | null>(null);
 
   const conversationId = $derived(data.conversation.id);
@@ -238,6 +280,43 @@ import type {
           <Tooltip.Content side="bottom">Branch conversation</Tooltip.Content>
         </Tooltip.Root>
       {/if}
+      {#if outputFiles.length > 0}
+        <Tooltip.Root>
+          <Tooltip.Trigger
+            onclick={() => (isFilesPanelCollapsed = !isFilesPanelCollapsed)}
+            class="rounded-md p-1.5 text-muted-foreground hover:bg-accent hover:text-foreground"
+            aria-label={isFilesPanelCollapsed ? "Show generated files" : "Hide generated files"}
+          >
+            <FileTextIcon size={15} />
+          </Tooltip.Trigger>
+          <Tooltip.Content side="bottom">
+            {isFilesPanelCollapsed ? "Show generated files" : "Hide generated files"}
+          </Tooltip.Content>
+        </Tooltip.Root>
+      {/if}
+      {#if shareToken}
+        <DropdownMenu.Root>
+          <DropdownMenu.Trigger
+            class="ml-1 rounded-md bg-secondary px-2.5 py-1 text-xs text-secondary-foreground hover:bg-accent hover:text-accent-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+          >
+            {shareLabel === "Share" ? "Shared" : shareLabel}
+          </DropdownMenu.Trigger>
+          <DropdownMenu.Content align="end">
+            <DropdownMenu.Item onSelect={() => void copyLink(shareToken as string)}>
+              Copy link
+            </DropdownMenu.Item>
+            <DropdownMenu.Item onSelect={() => void stopSharing()}>Stop sharing</DropdownMenu.Item>
+          </DropdownMenu.Content>
+        </DropdownMenu.Root>
+      {:else}
+        <button
+          type="button"
+          onclick={() => void startSharing()}
+          class="ml-1 rounded-md bg-secondary px-2.5 py-1 text-xs text-secondary-foreground hover:bg-accent hover:text-accent-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+        >
+          {shareLabel}
+        </button>
+      {/if}
     </header>
 
     {#if chat.isStreamingFor(conversationId)}
@@ -246,6 +325,7 @@ import type {
 
     <MessageList
       messages={visibleMessages}
+      mode={data.conversation.mode}
       isStreaming={chat.isStreamingFor(conversationId)}
       onEdit={config?.capabilities.editMessage ? handleEdit : undefined}
       onRegenerate={config?.capabilities.regenerate ? handleRegenerate : undefined}

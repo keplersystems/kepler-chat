@@ -53,6 +53,45 @@ export async function persistChosenOption(
   conv.model_value = modelValue;
 }
 
+/**
+ * Establishment is deduped per conversation because the config route, the
+ * commands route, and the turn runner all reach for it at once on a new chat.
+ * Each holds its own row object, so only the winner sees the in-place session
+ * write; followers reload the session columns before acting on their copy.
+ */
+export function createSessionEstablisher(
+  establish: (conv: ConversationRow) => Promise<SessionConfigDTO>,
+): (conv: ConversationRow) => Promise<SessionConfigDTO> {
+  const inflight = new Map<string, Promise<SessionConfigDTO>>();
+  return async (conv) => {
+    const existing = inflight.get(conv.id);
+    if (existing) {
+      const config = await existing;
+      const [row] = await db
+        .select({
+          engineSessionId: conversation.engine_session_id,
+          forkPending: conversation.fork_pending,
+        })
+        .from(conversation)
+        .where(eq(conversation.id, conv.id));
+      if (row) {
+        conv.engine_session_id = row.engineSessionId;
+        conv.fork_pending = row.forkPending;
+      }
+      return config;
+    }
+    const task = establish(conv).finally(() => inflight.delete(conv.id));
+    inflight.set(conv.id, task);
+    return task;
+  };
+}
+
+/** Shown for a persisted model the engine has since stopped advertising. */
+export const STALE_MODEL = "No longer listed";
+
+/** Engines name effort levels in lowercase; option lists read better capitalised. */
+export const optionLabel = (value: string): string => value[0].toUpperCase() + value.slice(1);
+
 /** Overlay stored choices onto a driver's synthesized option list. */
 export function applyStoredValues(
   options: SessionConfigOption[],

@@ -26,22 +26,11 @@
 </script>
 
 <aside
-  class="t-smooth-width hidden overflow-hidden border-l bg-sidebar lg:flex {collapsed ? 'w-12' : 'w-80'}"
+  class="t-smooth-width hidden overflow-hidden bg-sidebar lg:flex {collapsed
+    ? 'w-0'
+    : 'w-80 border-l'}"
 >
-  {#if collapsed}
-    <div class="flex h-full w-full flex-col items-center pt-2">
-      <Tooltip.Root>
-        <Tooltip.Trigger
-          onclick={() => (collapsed = false)}
-          class="kepler-icon-btn rounded-md p-2 text-sidebar-foreground hover:bg-sidebar-accent"
-          aria-label="Expand files panel"
-        >
-          <FileTextIcon size={16} />
-        </Tooltip.Trigger>
-        <Tooltip.Content>Expand files panel</Tooltip.Content>
-      </Tooltip.Root>
-    </div>
-  {:else}
+  {#if !collapsed}
     <div class="flex h-full w-full min-w-0 flex-col whitespace-nowrap">
       <div class="flex h-12 shrink-0 items-center justify-between border-b px-3">
         <span class="text-sm font-semibold text-sidebar-foreground">

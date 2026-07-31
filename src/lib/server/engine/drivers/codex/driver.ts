@@ -8,6 +8,7 @@ import { eq } from "drizzle-orm";
 import type {
   ConversationMode,
   ElicitationSchema,
+  PermissionOptionKind,
   SessionConfigDTO,
   SessionConfigOption,
   StopReason,
@@ -24,9 +25,12 @@ import { VISUAL_FRAGMENT_GUIDANCE } from "../../core/prompts";
 import {
   applyStoredValues,
   cachedSessionConfig,
+  createSessionEstablisher,
   dropCachedSessionConfig,
+  optionLabel,
   persistChosenOption,
   setCachedSessionConfig,
+  STALE_MODEL,
   storedOptions,
 } from "../../core/session-config-store";
 import type {
@@ -47,10 +51,12 @@ import {
 } from "./app-server";
 import type {
   AgentMessageDeltaNotification,
+  CommandExecutionApprovalDecision,
   CommandExecutionOutputDeltaNotification,
   CommandExecutionRequestApprovalParams,
   CommandExecutionRequestApprovalResponse,
   ErrorNotification,
+  FileChangeApprovalDecision,
   FileChangeRequestApprovalParams,
   FileChangeRequestApprovalResponse,
   ItemStartedNotification,
@@ -75,13 +81,14 @@ import type {
 
 const EMBED_TEXT_LIMIT = 262144;
 const INTERRUPT_GRACE_MS = 10000;
-const FALLBACK_EFFORTS = ["low", "medium", "high"];
+/** The decisions both approval kinds accept; `satisfies` turns protocol drift into a build error. */
+type ApprovalDecision = Extract<CommandExecutionApprovalDecision, string> & FileChangeApprovalDecision;
 
 const APPROVAL_OPTIONS = [
-  { optionId: "accept", name: "Allow", kind: "allow_once" as const },
-  { optionId: "acceptForSession", name: "Always allow", kind: "allow_always" as const },
-  { optionId: "decline", name: "Reject", kind: "reject_once" as const },
-];
+  { optionId: "accept", name: "Allow", kind: "allow_once" },
+  { optionId: "acceptForSession", name: "Always allow", kind: "allow_always" },
+  { optionId: "decline", name: "Reject", kind: "reject_once" },
+] satisfies Array<{ optionId: ApprovalDecision; name: string; kind: PermissionOptionKind }>;
 
 interface ActiveTurn {
   conv: ConversationRow;
@@ -96,7 +103,6 @@ interface ActiveTurn {
   fail: (error: Error) => void;
 }
 
-const ensuring = new Map<string, Promise<SessionConfigDTO>>();
 const resumedEpochByThread = new Map<string, number>();
 const activeTurns = new Map<string, ActiveTurn>();
 let modelsPromise: Promise<Model[]> | null = null;
@@ -109,7 +115,8 @@ function codexBin(): string {
 function codexVersion(): string | null {
   if (versionCache === undefined) {
     const result = spawnSync(codexBin(), ["--version"], { encoding: "utf8" });
-    versionCache = result.status === 0 ? result.stdout.trim() : null;
+    // `codex --version` prints "codex-cli 0.145.0"; callers want the number.
+    versionCache = result.status === 0 ? (result.stdout.match(/\d+\.\d+\.\d+\S*/)?.[0] ?? null) : null;
   }
   return versionCache;
 }
@@ -132,34 +139,43 @@ function loadModels(): Promise<Model[]> {
 }
 
 function synthesizeConfig(models: Model[], stored: Record<string, string>): SessionConfigDTO {
-  const fallback = models.find((model) => model.isDefault) ?? models[0];
-  const current = models.find((model) => model.id === stored.model) ?? fallback;
-  const efforts = current?.supportedReasoningEfforts.map((option) => option.reasoningEffort) ?? [];
-  const effortValues = efforts.length ? efforts : FALLBACK_EFFORTS;
+  const listed = models.filter((model) => !model.hidden);
+  const current =
+    listed.find((model) => model.id === stored.model) ??
+    (stored.model ? null : (listed.find((model) => model.isDefault) ?? listed[0]));
+  const efforts = current?.supportedReasoningEfforts ?? [];
   const options: SessionConfigOption[] = [
     {
       id: "model",
       name: "Model",
       category: "model",
       type: "select",
-      currentValue: current?.id ?? "",
-      options: models.map((model) => ({
-        value: model.id,
-        name: model.displayName,
-        description: model.description || null,
-      })),
+      currentValue: current?.id ?? stored.model ?? "",
+      options: [
+        ...listed.map((model) => ({
+          value: model.id,
+          name: model.displayName,
+          description: model.description || null,
+        })),
+        ...(current ? [] : [{ value: stored.model, name: stored.model, description: STALE_MODEL }]),
+      ],
     },
-    {
+  ];
+  if (efforts.length > 0) {
+    options.push({
       id: "effort",
       name: "Reasoning effort",
       type: "select",
-      currentValue: stored.effort ?? current?.defaultReasoningEffort ?? effortValues[0],
-      options: effortValues.map((value) => ({
-        value,
-        name: value[0].toUpperCase() + value.slice(1),
+      currentValue: efforts.some((option) => option.reasoningEffort === stored.effort)
+        ? stored.effort
+        : (current?.defaultReasoningEffort ?? ""),
+      options: efforts.map((option) => ({
+        value: option.reasoningEffort,
+        name: optionLabel(option.reasoningEffort),
+        description: option.description || null,
       })),
-    },
-  ];
+    });
+  }
   return {
     configOptions: applyStoredValues(options, stored),
     capabilities: {
@@ -411,7 +427,7 @@ async function approveCommand(
     options: APPROVAL_OPTIONS,
   });
   if (reply.outcome !== "selected") return { decision: "cancel" };
-  return { decision: reply.optionId as "accept" | "acceptForSession" | "decline" };
+  return { decision: reply.optionId as ApprovalDecision };
 }
 
 async function approveFileChange(
@@ -432,7 +448,7 @@ async function approveFileChange(
     options: APPROVAL_OPTIONS,
   });
   if (reply.outcome !== "selected") return { decision: "cancel" };
-  return { decision: reply.optionId as "accept" | "acceptForSession" | "decline" };
+  return { decision: reply.optionId as ApprovalDecision };
 }
 
 async function answerUserInput(
@@ -537,17 +553,11 @@ export function createCodexDriver(): EngineDriver {
       commands: false,
     },
 
-    async ensureSession(conv) {
-      const inFlight = ensuring.get(conv.id);
-      if (inFlight) return inFlight;
-      const promise = (async () => {
-        await establishThread(conv);
-        const config = synthesizeConfig(await loadModels(), storedOptions(conv));
-        return setCachedSessionConfig(conv.id, config);
-      })().finally(() => ensuring.delete(conv.id));
-      ensuring.set(conv.id, promise);
-      return promise;
-    },
+    ensureSession: createSessionEstablisher(async (conv) => {
+      await establishThread(conv);
+      const config = synthesizeConfig(await loadModels(), storedOptions(conv));
+      return setCachedSessionConfig(conv.id, config);
+    }),
 
     async deleteSession(conv) {
       dropCachedSessionConfig(conv.id);

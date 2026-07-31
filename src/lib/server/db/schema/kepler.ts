@@ -52,6 +52,8 @@ export const conversation = sqliteTable(
     model_value: text("model_value"),
     /** JSON map of chosen session config option ids to values, reapplied per session. */
     config_options: text("config_options"),
+    /** Unguessable token; present only while the conversation is shared read-only. */
+    share_token: text("share_token").unique(),
     context_used: integer("context_used"),
     context_size: integer("context_size"),
     total_cost: real("total_cost").notNull().default(0),

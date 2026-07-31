@@ -53,11 +53,29 @@
     "radius",
   ];
 
+  /**
+   * Visuals routinely build translucent shades by concatenating a hex suffix
+   * (`accent + "33"`), which throws on oklch. Tokens are flattened over the app
+   * background to opaque sRGB hex so that idiom stays valid; non-colors pass through.
+   */
+  function toHex(value: string, backdrop: string, ctx: CanvasRenderingContext2D): string {
+    if (!CSS.supports("color", value)) return value;
+    ctx.fillStyle = backdrop;
+    ctx.fillRect(0, 0, 1, 1);
+    ctx.fillStyle = value;
+    ctx.fillRect(0, 0, 1, 1);
+    const [r, g, b] = ctx.getImageData(0, 0, 1, 1).data;
+    return `#${[r, g, b].map((channel) => channel.toString(16).padStart(2, "0")).join("")}`;
+  }
+
   function themeBridge(): string {
     if (!browser) return "";
     const styles = getComputedStyle(document.documentElement);
+    const ctx = document.createElement("canvas").getContext("2d");
+    if (!ctx) return "";
+    const backdrop = styles.getPropertyValue("--background").trim();
     const vars = THEME_VARS.map(
-      (name) => `--${name}: ${styles.getPropertyValue(`--${name}`).trim()};`,
+      (name) => `--${name}: ${toHex(styles.getPropertyValue(`--${name}`).trim(), backdrop, ctx)};`,
     ).join("");
     // Aliases matching the claude.ai token names models tend to emit.
     return `:root{${vars}

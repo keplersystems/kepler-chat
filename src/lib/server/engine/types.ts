@@ -27,6 +27,8 @@ export interface ResolvedAttachment {
   relativePath: string;
   filename: string;
   mimeType: string;
+  /** Text files only. */
+  lines?: number;
 }
 
 export interface TurnInput {

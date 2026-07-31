@@ -1,7 +1,8 @@
 <script lang="ts">
-  import type { MessageView } from "$lib/contracts";
+  import type { ConversationMode, MessageView, PartView } from "$lib/contracts";
   import { isAbnormalFinish, messageText } from "$lib/messages";
   import Markdown from "$lib/components/markdown/Markdown.svelte";
+  import ActivityTrail from "./parts/ActivityTrail.svelte";
   import ToolCallCard from "./parts/ToolCallCard.svelte";
   import ReasoningBlock from "./parts/ReasoningBlock.svelte";
   import FileChip from "./parts/FileChip.svelte";
@@ -18,6 +19,8 @@
 
   interface Props {
     message: MessageView;
+    /** Chat groups tool work into one trail; work keeps the per-call cards. */
+    mode?: ConversationMode;
     /** True while this message is the one currently being generated. */
     streaming?: boolean;
     /** Rewind-and-replace; passed only when the engine can truly rewind. */
@@ -27,7 +30,14 @@
     onBranchAt?: (message: MessageView) => void;
   }
 
-  let { message, streaming = false, onEdit, onRegenerate, onBranchAt }: Props = $props();
+  let {
+    message,
+    mode = "work",
+    streaming = false,
+    onEdit,
+    onRegenerate,
+    onBranchAt,
+  }: Props = $props();
 
   let copied = $state(false);
   let copyTimer: ReturnType<typeof setTimeout> | null = null;
@@ -53,6 +63,33 @@
   );
   const totalTokens = $derived(message.tokens?.total);
   const lastPartId = $derived(message.parts.at(-1)?.id);
+
+  type Block = { trail: false; part: PartView } | { trail: true; id: string; parts: PartView[] };
+
+  /** In chat, a consecutive run of reasoning and tool calls reads as one
+   * activity rather than a stack of per-call cards. */
+  const blocks = $derived.by<Block[]>(() => {
+    const out: Block[] = [];
+    for (const part of message.parts) {
+      const grouped = mode === "chat" && (part.type === "tool" || part.type === "reasoning");
+      const last = out.at(-1);
+      if (grouped && last?.trail) last.parts.push(part);
+      else if (grouped) out.push({ trail: true, id: part.id, parts: [part] });
+      else out.push({ trail: false, part });
+    }
+    return out;
+  });
+
+  /**
+   * A live trail or reasoning block already shows its own orb and says what it
+   * is doing; a second one below it just competes with the first.
+   */
+  const blockOwnsIndicator = $derived.by(() => {
+    const last = blocks.at(-1);
+    if (!streaming || !last) return false;
+    if (last.trail) return last.parts.at(-1)?.id === lastPartId;
+    return last.part.type === "reasoning" && last.part.id === lastPartId;
+  });
 
   async function copyText() {
     try {
@@ -88,7 +125,7 @@
         <div class="mt-1.5 flex items-center justify-end gap-2">
           {#each message.parts as part (part.id)}
             {#if part.type === "file"}
-              <FileChip {part} />
+              <FileChip {part} compact />
             {/if}
           {/each}
           <Button variant="ghost" size="sm" onclick={() => (editing = false)}>Cancel</Button>
@@ -105,24 +142,32 @@
               {part.text}
             </div>
           {:else if part.type === "file"}
-            <FileChip {part} />
+            <FileChip {part} compact />
           {/if}
         {/each}
       </div>
     {/if}
   {:else}
     <div class="flex min-w-0 flex-col gap-2.5">
-      {#each message.parts as part (part.id)}
-        {#if part.type === "text"}
-          <Markdown source={part.text} />
-        {:else if part.type === "reasoning"}
-          {#if part.text.trim().length > 0}
-            <ReasoningBlock text={part.text} live={streaming && part.id === lastPartId} />
+      {#each blocks as block (block.trail ? block.id : block.part.id)}
+        {#if block.trail}
+          <ActivityTrail
+            parts={block.parts}
+            live={streaming && block.parts.at(-1)?.id === lastPartId}
+          />
+        {:else if block.part.type === "text"}
+          <Markdown source={block.part.text} />
+        {:else if block.part.type === "reasoning"}
+          {#if block.part.text.trim().length > 0}
+            <ReasoningBlock
+              text={block.part.text}
+              live={streaming && block.part.id === lastPartId}
+            />
           {/if}
-        {:else if part.type === "tool"}
-          <ToolCallCard {part} />
-        {:else if part.type === "file"}
-          <FileChip {part} />
+        {:else if block.part.type === "tool"}
+          <ToolCallCard part={block.part} />
+        {:else if block.part.type === "file"}
+          <FileChip part={block.part} />
         {/if}
       {/each}
       {#if message.error}
@@ -130,8 +175,8 @@
           {message.error}
         </div>
       {/if}
-      {#if streaming}
-        <ThinkingOrb size={20} state="working" class="mt-1 opacity-80" />
+      {#if streaming && !blockOwnsIndicator}
+        <ThinkingOrb size={20} state="composing" class="mt-1 opacity-80" />
       {/if}
     </div>
   {/if}

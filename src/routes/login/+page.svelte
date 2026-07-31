@@ -2,7 +2,7 @@
   import { enhance } from "$app/forms";
   import { Button } from "$lib/components/ui/button";
   import { Input } from "$lib/components/ui/input";
-  import { ThinkingOrb } from "$lib/components/ui/orb";
+  import KeplerMark from "$lib/components/ui/KeplerMark.svelte";
 
   let { form } = $props();
 
@@ -20,7 +20,7 @@
 <div class="flex min-h-screen items-center justify-center bg-background px-4">
   <div class="w-full max-w-sm space-y-8">
     <div class="flex flex-col items-center gap-4 text-center">
-      <ThinkingOrb size={64} state="searching" speed={0.7} />
+      <KeplerMark size={84} class="text-foreground" />
       <div class="space-y-1.5">
         <h1 class="font-mono text-sm font-semibold uppercase tracking-[0.3em] text-foreground">Kepler</h1>
         <p class="text-sm text-muted-foreground">Enter your passcode to continue.</p>

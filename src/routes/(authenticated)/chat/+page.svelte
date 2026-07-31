@@ -3,7 +3,7 @@
   import { agentConfig } from "$lib/state/agent-config.svelte";
   import { modelPrefs } from "$lib/state/model-prefs.svelte";
   import { startChat } from "$lib/state/start-chat";
-  import { ThinkingOrb } from "$lib/components/ui/orb";
+  import KeplerMark from "$lib/components/ui/KeplerMark.svelte";
   import type { AgentId, ConversationMode, SessionConfigDTO } from "$lib/contracts";
   import MessageInput from "$lib/components/chat/MessageInput.svelte";
   import CodeIcon from "@lucide/svelte/icons/code";
@@ -84,11 +84,9 @@
 </script>
 
 <div class="flex h-full flex-col items-center justify-center gap-8 px-4 pb-16 sm:px-8">
-  <div class="flex flex-col items-center gap-5">
-    <ThinkingOrb size={64} state="searching" speed={0.7} />
-    <p class="font-mono text-xs font-medium uppercase tracking-[0.3em] text-muted-foreground">
-      {greeting}
-    </p>
+  <div class="flex flex-col items-center gap-4">
+    <KeplerMark size={104} class="text-foreground" />
+    <h1 class="font-serif text-3xl tracking-tight text-foreground sm:text-4xl">{greeting}</h1>
   </div>
 
   <div class="w-full max-w-3xl">

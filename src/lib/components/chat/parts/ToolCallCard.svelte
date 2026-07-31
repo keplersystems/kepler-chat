@@ -62,7 +62,7 @@
   >
     <span class="shrink-0 text-muted-foreground" aria-hidden="true">
       {#if status === "in_progress"}
-        <ThinkingOrb size={20} state="working" />
+        <ThinkingOrb size={20} state={part.kind === "fetch" || part.kind === "read" ? "searching" : "working"} />
       {:else if status === "completed"}
         <CheckIcon size={13} strokeWidth={2.5} class="opacity-70" />
       {:else if status === "failed"}

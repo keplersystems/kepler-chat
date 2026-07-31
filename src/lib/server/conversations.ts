@@ -173,3 +173,21 @@ export async function deleteConversation(id: string): Promise<void> {
   await db.delete(message).where(eq(message.conversation_id, id));
   await db.delete(conversation).where(eq(conversation.id, id));
 }
+
+/**
+ * Sharing hands out an unguessable token rather than the conversation id, so a
+ * shared link cannot be walked back to the authenticated routes. Idempotent:
+ * re-sharing returns the link already in circulation.
+ */
+export async function shareConversation(id: string): Promise<{ token: string }> {
+  const row = await db.query.conversation.findFirst({ where: eq(conversation.id, id) });
+  if (!row) throw new HttpError(404, "Conversation not found");
+  if (row.share_token) return { token: row.share_token };
+  const token = `${generateId()}${generateId()}`;
+  await db.update(conversation).set({ share_token: token }).where(eq(conversation.id, id));
+  return { token };
+}
+
+export async function unshareConversation(id: string): Promise<void> {
+  await db.update(conversation).set({ share_token: null }).where(eq(conversation.id, id));
+}

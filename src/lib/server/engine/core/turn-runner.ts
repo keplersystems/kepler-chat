@@ -2,9 +2,10 @@
 // driver a TurnSink, persists streamed parts incrementally, normalizes
 // usage/cost, and broadcasts Kepler SSE events from the replayable log.
 
-import { basename } from "node:path";
+import { open, readFile } from "node:fs/promises";
+import { basename, resolve } from "node:path";
 import { eq } from "drizzle-orm";
-import { downloadFileUrl, isModelOption } from "$lib/contracts";
+import { downloadFileUrl, fileModality, isModelOption } from "$lib/contracts";
 import type {
   MessageView,
   PartView,
@@ -16,13 +17,18 @@ import { db } from "$lib/server/db/client";
 import { conversation, message, part } from "$lib/server/db/schema/kepler";
 import {
   isEnoent,
+  listFilesRecursive,
   lookupMimeType,
   resolveExistingSafeFilePath,
   statOrNull,
 } from "$lib/server/files";
 import { HttpError } from "$lib/server/http-error";
 import { generateId } from "$lib/server/ids";
-import { getConversationInputPath } from "$lib/server/paths";
+import {
+  getConversationInputPath,
+  getConversationOutputPath,
+  getConversationRoot,
+} from "$lib/server/paths";
 import type {
   ConversationRow,
   ResolvedAttachment,
@@ -40,6 +46,8 @@ import {
 } from "./stream-hub";
 
 const DELTA_FLUSH_MS = 300;
+/** Text beyond this is embedded by reference, so counting its lines is wasted work. */
+const EMBED_TEXT_LIMIT = 262144;
 const DEFAULT_TITLE = "New Chat";
 
 interface StreamingPart {
@@ -118,6 +126,10 @@ class AssistantAccumulator {
     await this.pushPart({ id: generateId(), type: kind, text });
   }
 
+  async appendFile(view: Extract<PartView, { type: "file" }>): Promise<void> {
+    await this.pushPart(view);
+  }
+
   async upsertToolCall(update: ToolPartUpdate): Promise<void> {
     const existing = this.parts.find(
       (entry) => entry.view.type === "tool" && entry.view.toolCallId === update.toolCallId,
@@ -187,7 +199,10 @@ class AssistantAccumulator {
     tokens?: TurnTokens;
   }): Promise<MessageView | null> {
     if (this.flushTimer) clearInterval(this.flushTimer);
-    if (!this.announced && !fields.error) return null;
+    // A turn that ends without producing anything is still an outcome. Dropping
+    // it leaves the thread sitting on a reply that is never coming.
+    const error =
+      fields.error ?? (this.announced ? undefined : "The model returned an empty response.");
     await this.announce();
     // A turn can end while tool calls are still open (cancel, agent crash);
     // leaving them pending would render as perpetually in-flight.
@@ -210,7 +225,7 @@ class AssistantAccumulator {
       .set({
         engine_message_id: this.engineMessageId,
         stop_reason: fields.stopReason,
-        error: fields.error ?? null,
+        error: error ?? null,
         cost: fields.cost ?? null,
         tokens: fields.tokens ? JSON.stringify(fields.tokens) : null,
         completed_at: new Date(),
@@ -219,7 +234,7 @@ class AssistantAccumulator {
     return {
       ...this.view(),
       stopReason: fields.stopReason,
-      error: fields.error,
+      error,
       cost: fields.cost,
       tokens: fields.tokens,
       completedAt: Date.now(),
@@ -281,6 +296,7 @@ async function persistUserMessage(
       url: downloadFileUrl(conv.id, attachment.relativePath, "input"),
       filename: attachment.filename,
       mimeType: attachment.mimeType,
+      ...(attachment.lines === undefined ? {} : { lines: attachment.lines }),
     });
   }
   await db.insert(message).values({
@@ -302,6 +318,75 @@ async function persistUserMessage(
     })),
   );
   return { id: messageId, role: "user", parts, createdAt, completedAt: createdAt };
+}
+
+/**
+ * Browsers report the OS mime database, which labels plenty of text formats
+ * with exotic types (Linux calls a `.tsx` a Tiled tileset). Providers reject
+ * what they do not recognise, and a rejected part stays in the transcript and
+ * is replayed on every later turn, so one bad upload never stops failing.
+ * A mime is only worth relaying when it names a modality the model can act on;
+ * otherwise the file is described by what its bytes actually are, and text
+ * carries its length so the chip can say how much there is to read.
+ */
+async function describeFile(
+  reported: string | undefined,
+  path: string,
+  size: number,
+): Promise<{ mimeType: string; lines?: number }> {
+  for (const candidate of [reported?.trim(), lookupMimeType(path)]) {
+    if (candidate && fileModality(candidate)) return { mimeType: candidate };
+  }
+  const handle = await open(path);
+  try {
+    const { buffer, bytesRead } = await handle.read(Buffer.alloc(4096), 0, 4096, 0);
+    if (buffer.subarray(0, bytesRead).includes(0)) return { mimeType: "application/octet-stream" };
+  } finally {
+    await handle.close();
+  }
+  if (size > EMBED_TEXT_LIMIT) return { mimeType: "text/plain" };
+  const text = await readFile(path, "utf8");
+  const lines = text ? text.split("\n").length - (text.endsWith("\n") ? 1 : 0) : 0;
+  return { mimeType: "text/plain", lines };
+}
+
+/**
+ * Files the agent wrote during this turn, so its own output is readable in the
+ * reply instead of only in the side panel. Keyed by size and mtime, which is
+ * what distinguishes a rewritten file from an untouched one.
+ */
+async function snapshotOutputs(conv: ConversationRow): Promise<Map<string, string>> {
+  // Root-relative, matching the download route, whose `output` scope resolves
+  // against the conversation root rather than the output directory.
+  const entries = await listFilesRecursive(
+    getConversationRoot(conv),
+    getConversationOutputPath(conv),
+  ).catch(() => []);
+  return new Map(
+    entries.filter((entry) => !entry.isDir).map((entry) => [entry.path, `${entry.size}:${entry.mtime}`]),
+  );
+}
+
+async function outputsWrittenSince(
+  conv: ConversationRow,
+  before: Map<string, string>,
+): Promise<Array<Extract<PartView, { type: "file" }>>> {
+  const root = getConversationRoot(conv);
+  const parts: Array<Extract<PartView, { type: "file" }>> = [];
+  for (const [path, stamp] of await snapshotOutputs(conv)) {
+    if (before.get(path) === stamp) continue;
+    const absolutePath = resolve(root, path);
+    const stats = await statOrNull(absolutePath);
+    if (!stats?.isFile()) continue;
+    parts.push({
+      id: generateId(),
+      type: "file",
+      url: downloadFileUrl(conv.id, path, "output"),
+      filename: basename(path),
+      ...(await describeFile(undefined, absolutePath, stats.size)),
+    });
+  }
+  return parts;
 }
 
 async function resolveAttachments(
@@ -330,10 +415,7 @@ async function resolveAttachments(
       absolutePath,
       relativePath: attachment.path,
       filename: attachment.filename?.trim() || basename(attachment.path),
-      mimeType:
-        attachment.mimeType?.trim() ||
-        lookupMimeType(absolutePath) ||
-        "application/octet-stream",
+      ...(await describeFile(attachment.mimeType, absolutePath, stats.size)),
     });
   }
   return resolved;
@@ -411,12 +493,16 @@ function runTurn(conv: ConversationRow, input: SendMessageInput): void {
         },
       };
 
+      const outputsBefore = await snapshotOutputs(conv);
       const result = await driver.runTurn(
         conv,
         { text: input.text.trim(), attachments },
         sink,
         state.controller.signal,
       );
+      for (const file of await outputsWrittenSince(conv, outputsBefore)) {
+        await acc.appendFile(file);
+      }
 
       const stopReason: StopReason = state.cancelled ? "cancelled" : result.stopReason;
 

@@ -4,15 +4,18 @@
 // with the transcript copied into the target cwd's project dir).
 
 import { copyFile, cp, mkdir, rm } from "node:fs/promises";
+import { readFileSync } from "node:fs";
 import { createRequire } from "node:module";
 import { homedir } from "node:os";
-import { join } from "node:path";
+import { dirname, join } from "node:path";
 import { readFile } from "node:fs/promises";
 import { eq } from "drizzle-orm";
 import { query } from "@anthropic-ai/claude-agent-sdk";
 import type {
   CanUseTool,
+  EffortLevel,
   McpServerConfig,
+  ModelInfo,
   Options,
   PermissionUpdate,
   SDKUserMessage,
@@ -31,7 +34,7 @@ import type {
 } from "$lib/contracts";
 import { db } from "$lib/server/db/client";
 import { conversation } from "$lib/server/db/schema/kepler";
-import { getConversationRoot } from "$lib/server/paths";
+import { getConversationRoot, getProbeRoot } from "$lib/server/paths";
 import { resolveMcpServers } from "$lib/server/mcp";
 import { statOrNull } from "$lib/server/files";
 import { askElicitation, askPermission } from "../../core/requests";
@@ -40,8 +43,10 @@ import {
   applyStoredValues,
   cachedSessionConfig,
   dropCachedSessionConfig,
+  optionLabel,
   persistChosenOption,
   setCachedSessionConfig,
+  STALE_MODEL,
   storedOptions,
 } from "../../core/session-config-store";
 import type {
@@ -56,9 +61,36 @@ import { CHAT_SYSTEM_PROMPT } from "./prompts";
 
 const EMBED_TEXT_LIMIT = 262144;
 
-const MODEL_VALUES = ["default", "opus", "sonnet", "haiku"];
-const EFFORT_VALUES = ["low", "medium", "high", "xhigh", "max"] as const;
-type EffortValue = (typeof EFFORT_VALUES)[number];
+let modelsPromise: Promise<ModelInfo[]> | null = null;
+
+/**
+ * The CLI owns the catalog, including which effort levels each model accepts,
+ * so it is asked rather than mirrored here. A prompt that never yields keeps
+ * the session idle: this is a control round-trip, no turn and no tokens.
+ */
+function loadModels(): Promise<ModelInfo[]> {
+  modelsPromise ??= (async () => {
+    const cwd = getProbeRoot("claude");
+    await mkdir(cwd, { recursive: true });
+    const abortController = new AbortController();
+    async function* idle(): AsyncIterable<SDKUserMessage> {
+      await new Promise(() => {});
+    }
+    const response = query({
+      prompt: idle(),
+      options: { cwd, abortController, tools: [], settingSources: [] },
+    });
+    try {
+      return await response.supportedModels();
+    } finally {
+      abortController.abort();
+    }
+  })().catch((error) => {
+    modelsPromise = null;
+    throw error;
+  });
+  return modelsPromise;
+}
 
 /** Read is scoped by permissions to the conversation root; Skill needs it. */
 const CHAT_TOOLS = ["WebSearch", "WebFetch", "Skill", "Read"];
@@ -73,8 +105,11 @@ const alwaysAllowed = new Map<string, Set<string>>();
 
 const sdkVersion: string = (() => {
   try {
-    const require = createRequire(import.meta.url);
-    return require("@anthropic-ai/claude-agent-sdk/package.json").version as string;
+    // The SDK's exports map omits ./package.json, so read it beside the entry.
+    const root = dirname(createRequire(import.meta.url).resolve("@anthropic-ai/claude-agent-sdk"));
+    return (JSON.parse(readFileSync(join(root, "package.json"), "utf8") as string) as {
+      version: string;
+    }).version;
   } catch {
     return "unknown";
   }
@@ -84,30 +119,67 @@ const encodeCwd = (cwd: string): string => cwd.replaceAll("/", "-");
 const projectDir = (cwd: string): string =>
   join(homedir(), ".claude", "projects", encodeCwd(cwd));
 
-function synthesizeConfig(stored: Record<string, string>): SessionConfigDTO {
+/**
+ * The row this conversation sits on and the effort to send with it.
+ * `resolvedModel` is how a persisted explicit id matches the alias row covering
+ * it; effort keeps the stored choice while the model still advertises it, else
+ * takes the middle rung, and is null when the model advertises no ladder.
+ */
+function selection(models: ModelInfo[], stored: Record<string, string>) {
+  const value = stored.model ?? models[0]?.value ?? "";
+  const current = models.find((model) => model.value === value || model.resolvedModel === value);
+  const efforts = current?.supportedEffortLevels ?? [];
+  const chosen = stored.effort as EffortLevel | undefined;
+  const effort = chosen && efforts.includes(chosen) ? chosen : efforts[(efforts.length - 1) >> 1];
+  return { value, current, efforts, effort: effort ?? null };
+}
+
+/**
+ * The CLI labels bare families ("Sonnet") where claude.ai shows the version.
+ * `resolvedModel` carries it structurally (claude-sonnet-5,
+ * claude-haiku-4-5-<date>), so the version is appended only when the label is
+ * exactly the family name; qualified labels like "Opus (1M context)" and
+ * "Default (recommended)" already say something and are left alone.
+ */
+function versionedName(model: ModelInfo): string {
+  const id = model.resolvedModel?.replace(/\[.*$/, "").replace(/^claude-/, "");
+  const [family, ...rest] = id?.split("-") ?? [];
+  if (!family || model.displayName.toLowerCase() !== family) return model.displayName;
+  // Two digits at most: trailing date stamps are not part of the version.
+  const version = rest.filter((part) => /^\d{1,2}$/.test(part)).join(".");
+  return version ? `${model.displayName} ${version}` : model.displayName;
+}
+
+function synthesizeConfig(models: ModelInfo[], stored: Record<string, string>): SessionConfigDTO {
+  const { value, current, efforts, effort } = selection(models, stored);
   const options: SessionConfigOption[] = [
     {
       id: "model",
       name: "Model",
       category: "model",
       type: "select",
-      currentValue: stored.model ?? "default",
-      options: MODEL_VALUES.map((value) => ({
-        value,
-        name: value === "default" ? "Default" : value[0].toUpperCase() + value.slice(1),
-      })),
+      currentValue: value,
+      options: [
+        ...models.map((model) => ({
+          value: model.value,
+          name: versionedName(model),
+          description: model.description,
+        })),
+        // A model the CLI stopped listing still runs, so it stays visible
+        // rather than silently reading as another model.
+        ...(value && !current ? [{ value, name: value, description: STALE_MODEL }] : []),
+      ],
     },
-    {
+  ];
+  if (effort) {
+    options.push({
       id: "effort",
       name: "Reasoning effort",
       type: "select",
-      currentValue: stored.effort ?? "high",
-      options: EFFORT_VALUES.map((value) => ({
-        value,
-        name: value[0].toUpperCase() + value.slice(1),
-      })),
-    },
-  ];
+      currentValue: effort,
+      options: efforts.map((level) => ({ value: level, name: optionLabel(level) })),
+    });
+  }
   return {
     configOptions: applyStoredValues(options, stored),
     capabilities: {
@@ -283,7 +355,10 @@ export function createClaudeDriver(): EngineDriver {
     async ensureSession(conv) {
       const cached = cachedSessionConfig(conv.id);
       if (cached) return cached;
-      return setCachedSessionConfig(conv.id, synthesizeConfig(storedOptions(conv)));
+      return setCachedSessionConfig(
+        conv.id,
+        synthesizeConfig(await loadModels(), storedOptions(conv)),
+      );
     },
 
     async deleteSession(conv) {
@@ -337,6 +412,7 @@ export function createClaudeDriver(): EngineDriver {
 
     async runTurn(conv, input, sink, signal) {
       const stored = storedOptions(conv);
+      const { effort } = selection(await loadModels(), stored);
       const root = getConversationRoot(conv);
       const abortController = new AbortController();
       const onAbort = () => abortController.abort();
@@ -386,7 +462,7 @@ export function createClaudeDriver(): EngineDriver {
           abortController,
           canUseTool: buildCanUseTool(conv),
           ...(stored.model && stored.model !== "default" ? { model: stored.model } : {}),
-          effort: (stored.effort as EffortValue) ?? "high",
+          ...(effort ? { effort } : {}),
           ...(forkPending
             ? {
                 resume: forkPending.sessionId,
@@ -554,7 +630,7 @@ export function createClaudeDriver(): EngineDriver {
 
     async agentConfig(_mode, modelValue) {
       const stored: Record<string, string> = modelValue ? { model: modelValue } : {};
-      return synthesizeConfig(stored);
+      return synthesizeConfig(await loadModels(), stored);
     },
 
     sessionConfigFor(conversationId) {
@@ -566,7 +642,7 @@ export function createClaudeDriver(): EngineDriver {
         throw new Error(`Unknown config option: ${configId}`);
       }
       await persistChosenOption(conv, configId, value);
-      const config = synthesizeConfig(storedOptions(conv));
+      const config = synthesizeConfig(await loadModels(), storedOptions(conv));
       return setCachedSessionConfig(conv.id, config);
     },
 

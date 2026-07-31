@@ -32,6 +32,7 @@ import { getConversationRoot } from "$lib/server/paths";
 import { askElicitation, askPermission } from "../../core/requests";
 import {
   cachedSessionConfig,
+  createSessionEstablisher,
   dropCachedSessionConfig,
   persistChosenOption,
   setCachedSessionConfig,
@@ -460,8 +461,6 @@ function mapTokens(info: AssistantMessage): TurnTokens {
 const sleep = (ms: number) => new Promise<void>((done) => setTimeout(done, ms));
 
 export function createOpencodeDriver(): EngineDriver {
-  const ensureInflight = new Map<string, Promise<SessionConfigDTO>>();
-
   async function establishSession(conv: ConversationRow): Promise<SessionConfigDTO> {
     const { client } = await opencodeServer();
     const root = getConversationRoot(conv);
@@ -499,13 +498,7 @@ export function createOpencodeDriver(): EngineDriver {
       commands: true,
     },
 
-    async ensureSession(conv) {
-      const inflight = ensureInflight.get(conv.id);
-      if (inflight) return inflight;
-      const task = establishSession(conv).finally(() => ensureInflight.delete(conv.id));
-      ensureInflight.set(conv.id, task);
-      return task;
-    },
+    ensureSession: createSessionEstablisher(establishSession),
 
     async deleteSession(conv) {
       dropCachedSessionConfig(conv.id);

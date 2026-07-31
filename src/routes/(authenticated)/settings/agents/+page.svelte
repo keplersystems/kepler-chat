@@ -94,10 +94,10 @@
     </div>
 
   {:else}
-    <div class="space-y-4">
+    <div class="divide-y divide-border">
       {#each data.agents as agent (agent.agentId)}
         {@const form = envForms[agent.agentId]}
-        <section class="rounded-xl border bg-card p-4" aria-label={agent.name}>
+        <section class="py-6 first:pt-0 last:pb-0" aria-label={agent.name}>
           <div class="flex flex-wrap items-center gap-3">
             <div class="flex min-w-0 flex-1 items-baseline gap-2">
               <h2 class="font-medium text-foreground">{agent.name}</h2>
@@ -119,7 +119,7 @@
           </div>
 
           {#if agent.authHint}
-            <p class="mt-2 select-text text-sm text-muted-foreground">
+            <p class="mt-1 max-w-prose select-text text-sm text-muted-foreground">
               {#each hintSegments(agent.authHint) as segment, index (index)}
                 {#if segment.code}
                   <code
@@ -132,7 +132,7 @@
             </p>
           {/if}
 
-          <div class="mt-4 border-t border-border pt-3">
+          <div class="mt-5">
             <h3 class="text-xs font-medium text-muted-foreground">Environment variables</h3>
             {#if agent.envKeys.length > 0}
               <ul class="mt-2 space-y-1">

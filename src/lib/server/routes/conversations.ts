@@ -8,6 +8,8 @@ import {
   deleteConversation,
   renameConversation,
   requireConversation,
+  shareConversation,
+  unshareConversation,
 } from "$lib/server/conversations";
 
 export const conversationsRoute = new Elysia({ prefix: "/api/conversations" })
@@ -83,6 +85,37 @@ export const conversationsRoute = new Elysia({ prefix: "/api/conversations" })
         tags: ["Conversations"],
         description:
           "Fork a conversation (working directory, history, and session when supported) into a new conversation",
+      },
+    },
+  )
+  .post(
+    "/:id/share",
+    async (context) => {
+      requireAuth(context);
+      return shareConversation(context.params.id);
+    },
+    {
+      params: t.Object({ id: t.String() }),
+      detail: {
+        summary: "Share conversation",
+        tags: ["Conversations"],
+        description: "Mint (or return) the read-only token that makes this conversation public",
+      },
+    },
+  )
+  .delete(
+    "/:id/share",
+    async (context) => {
+      requireAuth(context);
+      await unshareConversation(context.params.id);
+      return { success: true };
+    },
+    {
+      params: t.Object({ id: t.String() }),
+      detail: {
+        summary: "Unshare conversation",
+        tags: ["Conversations"],
+        description: "Revoke the read-only link",
       },
     },
   )
