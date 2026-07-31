@@ -1,61 +1,13 @@
 import type { AgentId } from "$lib/contracts";
-import { HttpError } from "$lib/server/http-error";
 import type { EngineDriver } from "./types";
 import { createClaudeDriver } from "./drivers/claude/driver";
 import { createCodexDriver } from "./drivers/codex/driver";
-
-/** Engines whose drivers are not yet implemented reject with 501 at use. */
-function stubDriver(id: AgentId, name: string): EngineDriver {
-  const unavailable = () =>
-    new HttpError(501, `The ${name} engine is not available in this build yet`);
-  return {
-    id,
-    name,
-    capabilities: {
-      chatMode: false,
-      fork: false,
-      forkAtMessage: false,
-      editMessage: false,
-      regenerate: false,
-      revertInPlace: false,
-      modelCatalog: false,
-      mcpStatus: false,
-      compact: false,
-      commands: false,
-    },
-    ensureSession: async () => {
-      throw unavailable();
-    },
-    deleteSession: async () => {},
-    forkSession: async () => {
-      throw unavailable();
-    },
-    rewindTo: async () => {
-      throw unavailable();
-    },
-    runTurn: async () => {
-      throw unavailable();
-    },
-    agentConfig: async () => null,
-    sessionConfigFor: () => null,
-    setConfigOption: async () => {
-      throw unavailable();
-    },
-    listCommands: async () => [],
-    status: async () => ({
-      available: false,
-      running: false,
-      version: null,
-      authHint: null,
-    }),
-    stop: async () => {},
-  };
-}
+import { createOpencodeDriver } from "./drivers/opencode/driver";
 
 const factories: Record<AgentId, () => EngineDriver> = {
   claude: createClaudeDriver,
   codex: createCodexDriver,
-  opencode: () => stubDriver("opencode", "OpenCode"),
+  opencode: createOpencodeDriver,
 };
 
 const instances = new Map<AgentId, EngineDriver>();

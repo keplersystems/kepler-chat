@@ -20,6 +20,7 @@ import { conversation } from "$lib/server/db/schema/kepler";
 import { statOrNull } from "$lib/server/files";
 import { getConversationRoot } from "$lib/server/paths";
 import { askElicitation, askPermission } from "../../core/requests";
+import { VISUAL_FRAGMENT_GUIDANCE } from "../../core/prompts";
 import {
   applyStoredValues,
   cachedSessionConfig,
@@ -183,6 +184,9 @@ async function establishThread(conv: ConversationRow): Promise<string> {
   }
   const started: ThreadStartResponse = await request("thread/start", {
     cwd: getConversationRoot(conv),
+    ...(conv.mode === "chat"
+      ? { developerInstructions: `You are in conversational chat mode.\n${VISUAL_FRAGMENT_GUIDANCE}` }
+      : {}),
   });
   const threadId = started.thread.id;
   resumedEpochByThread.set(threadId, epoch);
