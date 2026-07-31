@@ -4,7 +4,7 @@
   import { modelPrefs } from "$lib/state/model-prefs.svelte";
   import { startChat } from "$lib/state/start-chat";
   import { ThinkingOrb } from "$lib/components/ui/orb";
-  import type { AgentId, SessionConfigDTO } from "$lib/contracts";
+  import type { AgentId, ConversationMode, SessionConfigDTO } from "$lib/contracts";
   import MessageInput from "$lib/components/chat/MessageInput.svelte";
   import CodeIcon from "@lucide/svelte/icons/code";
   import FileTextIcon from "@lucide/svelte/icons/file-text";
@@ -30,12 +30,21 @@
 
   let draft = $state("");
   let selectedAgent = $state<AgentId | null>(null);
+  let selectedMode = $state<ConversationMode>("chat");
   let selectedOptions = $state<Record<string, string>>({});
 
   $effect(() => {
     agentCatalog.loadDefault().then((agentId) => {
       if (!selectedAgent) selectedAgent = agentId;
     });
+  });
+
+  const chatModeAvailable = $derived(
+    agentCatalog.agents.find((agent) => agent.agentId === selectedAgent)?.capabilities
+      .chatMode ?? true,
+  );
+  $effect(() => {
+    if (!chatModeAvailable && selectedMode === "chat") selectedMode = "agent";
   });
 
   $effect(() => {
@@ -70,7 +79,7 @@
 
   const handleSend = (text: string, files?: File[], mediaIds?: string[]) =>
     selectedAgent
-      ? startChat(text, selectedAgent, files, undefined, mediaIds, selectedOptions)
+      ? startChat(text, selectedAgent, selectedMode, files, undefined, mediaIds, selectedOptions)
       : Promise.resolve(false);
 </script>
 
@@ -89,6 +98,9 @@
       placeholder="What are we working on?"
       agentId={selectedAgent}
       onAgentChange={(agentId) => (selectedAgent = agentId)}
+      mode={selectedMode}
+      onModeSelect={(mode) => (selectedMode = mode)}
+      {chatModeAvailable}
       config={composeConfig}
       modelInfo={selectedAgent ? agentConfig.modelInfoFor(selectedAgent, selectedOptions.model) : {}}
       onConfigChange={(configId, value) =>

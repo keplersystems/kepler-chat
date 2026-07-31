@@ -6,22 +6,45 @@
   import ReasoningBlock from "./parts/ReasoningBlock.svelte";
   import FileChip from "./parts/FileChip.svelte";
   import { ThinkingOrb } from "$lib/components/ui/orb";
+  import { Button } from "$lib/components/ui/button";
   import * as Tooltip from "$lib/components/ui/tooltip";
   import ProviderLogo from "$lib/components/ui/ProviderLogo.svelte";
   import CheckIcon from "@lucide/svelte/icons/check";
   import CopyIcon from "@lucide/svelte/icons/copy";
+  import GitBranchIcon from "@lucide/svelte/icons/git-branch";
+  import PencilIcon from "@lucide/svelte/icons/pencil";
+  import RefreshCwIcon from "@lucide/svelte/icons/refresh-cw";
   import SigmaIcon from "@lucide/svelte/icons/sigma";
 
   interface Props {
     message: MessageView;
     /** True while this message is the one currently being generated. */
     streaming?: boolean;
+    /** Rewind-and-replace; passed only when the engine can truly rewind. */
+    onEdit?: (message: MessageView, text: string) => void;
+    onRegenerate?: (message: MessageView) => void;
+    /** Branch a new conversation anchored at this message. */
+    onBranchAt?: (message: MessageView) => void;
   }
 
-  let { message, streaming = false }: Props = $props();
+  let { message, streaming = false, onEdit, onRegenerate, onBranchAt }: Props = $props();
 
   let copied = $state(false);
   let copyTimer: ReturnType<typeof setTimeout> | null = null;
+  let editing = $state(false);
+  let editDraft = $state("");
+
+  function startEdit() {
+    editDraft = messageText(message);
+    editing = true;
+  }
+
+  function commitEdit() {
+    const text = editDraft.trim();
+    editing = false;
+    if (!text || text === messageText(message)) return;
+    onEdit?.(message, text);
+  }
 
   const isUser = $derived(message.role === "user");
   const isAssistant = $derived(message.role === "assistant");
@@ -45,19 +68,48 @@
 
 <div class="group flex flex-col {isUser ? 'items-end' : 'items-stretch'}">
   {#if isUser}
-    <div class="flex max-w-[85%] flex-col items-end gap-2 sm:max-w-[70%]">
-      {#each message.parts as part (part.id)}
-        {#if part.type === "text"}
-          <div
-            class="w-fit whitespace-pre-wrap break-words rounded-xl bg-secondary px-4 py-2.5 text-[15px]"
-          >
-            {part.text}
-          </div>
-        {:else if part.type === "file"}
-          <FileChip {part} />
-        {/if}
-      {/each}
-    </div>
+    {#if editing}
+      <div class="w-full max-w-[85%] sm:max-w-[70%]">
+        <!-- svelte-ignore a11y_autofocus -->
+        <textarea
+          bind:value={editDraft}
+          autofocus
+          rows={Math.min(editDraft.split("\n").length + 1, 10)}
+          class="w-full resize-none rounded-xl bg-secondary px-4 py-2.5 text-[15px] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring/50"
+          aria-label="Edit message"
+          onkeydown={(e) => {
+            if (e.key === "Escape") editing = false;
+            if (e.key === "Enter" && !e.shiftKey) {
+              e.preventDefault();
+              commitEdit();
+            }
+          }}
+        ></textarea>
+        <div class="mt-1.5 flex items-center justify-end gap-2">
+          {#each message.parts as part (part.id)}
+            {#if part.type === "file"}
+              <FileChip {part} />
+            {/if}
+          {/each}
+          <Button variant="ghost" size="sm" onclick={() => (editing = false)}>Cancel</Button>
+          <Button size="sm" onclick={commitEdit}>Send</Button>
+        </div>
+      </div>
+    {:else}
+      <div class="flex max-w-[85%] flex-col items-end gap-2 sm:max-w-[70%]">
+        {#each message.parts as part (part.id)}
+          {#if part.type === "text"}
+            <div
+              class="w-fit whitespace-pre-wrap break-words rounded-xl bg-secondary px-4 py-2.5 text-[15px]"
+            >
+              {part.text}
+            </div>
+          {:else if part.type === "file"}
+            <FileChip {part} />
+          {/if}
+        {/each}
+      </div>
+    {/if}
   {:else}
     <div class="flex min-w-0 flex-col gap-2.5">
       {#each message.parts as part (part.id)}
@@ -155,6 +207,42 @@
         </Tooltip.Trigger>
         <Tooltip.Content>{copied ? "Copied" : "Copy"}</Tooltip.Content>
       </Tooltip.Root>
+      {#if isUser && onEdit && !editing}
+        <Tooltip.Root>
+          <Tooltip.Trigger
+            onclick={startEdit}
+            class="rounded-md p-1 hover:bg-accent hover:text-accent-foreground"
+            aria-label="Edit message"
+          >
+            <PencilIcon size={13} />
+          </Tooltip.Trigger>
+          <Tooltip.Content>Edit &amp; rerun from here</Tooltip.Content>
+        </Tooltip.Root>
+      {/if}
+      {#if isAssistant && onRegenerate}
+        <Tooltip.Root>
+          <Tooltip.Trigger
+            onclick={() => onRegenerate?.(message)}
+            class="rounded-md p-1 hover:bg-accent hover:text-accent-foreground"
+            aria-label="Regenerate"
+          >
+            <RefreshCwIcon size={13} />
+          </Tooltip.Trigger>
+          <Tooltip.Content>Regenerate</Tooltip.Content>
+        </Tooltip.Root>
+      {/if}
+      {#if isAssistant && onBranchAt && message.engineMessageId}
+        <Tooltip.Root>
+          <Tooltip.Trigger
+            onclick={() => onBranchAt?.(message)}
+            class="rounded-md p-1 hover:bg-accent hover:text-accent-foreground"
+            aria-label="Branch from here"
+          >
+            <GitBranchIcon size={13} />
+          </Tooltip.Trigger>
+          <Tooltip.Content>Branch from here</Tooltip.Content>
+        </Tooltip.Root>
+      {/if}
     </div>
 
     {#if displayFinish}

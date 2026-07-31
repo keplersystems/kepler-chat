@@ -146,15 +146,25 @@ import type {
     void sessionConfig.setOption(conversationId, configId, value);
   }
 
-  async function handleBranch() {
+  async function handleBranch(atMessageId?: string) {
     const { data: created, error } = await api.api
       .conversations({ id: conversationId })
-      .branch.post();
+      .branch.post(atMessageId ? { atMessageId } : {});
     if (error || !created || "error" in created) {
       chat.setError("Failed to branch conversation");
       return;
     }
     await goto(`/chat/${created.id}`);
+  }
+
+  function handleEdit(message: MessageView, text: string) {
+    if (chat.isStreamingFor(conversationId)) return;
+    void chat.editMessage(conversationId, message.id, text, (title) => (liveTitle = title));
+  }
+
+  function handleRegenerate(message: MessageView) {
+    if (chat.isStreamingFor(conversationId)) return;
+    void chat.regenerateMessage(conversationId, message.id, (title) => (liveTitle = title));
   }
 
   async function handleSendMessage(text: string, files?: File[], mediaIds?: string[]) {
@@ -219,7 +229,7 @@ import type {
       {#if config?.capabilities.fork}
         <Tooltip.Root>
           <Tooltip.Trigger
-            onclick={handleBranch}
+            onclick={() => void handleBranch()}
             class="rounded-md p-1.5 text-muted-foreground hover:bg-accent hover:text-foreground"
             aria-label="Branch conversation"
           >
@@ -237,6 +247,11 @@ import type {
     <MessageList
       messages={visibleMessages}
       isStreaming={chat.isStreamingFor(conversationId)}
+      onEdit={config?.capabilities.editMessage ? handleEdit : undefined}
+      onRegenerate={config?.capabilities.regenerate ? handleRegenerate : undefined}
+      onBranchAt={config?.capabilities.forkAtMessage
+        ? (message) => void handleBranch(message.id)
+        : undefined}
     />
 
     {#if chat.lastError}

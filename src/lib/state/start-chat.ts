@@ -1,6 +1,6 @@
 import { goto } from "$app/navigation";
 import { api } from "$lib/api";
-import type { AgentId } from "$lib/contracts";
+import type { AgentId, ConversationMode } from "$lib/contracts";
 import { chat } from "$lib/state/chat.svelte";
 import { agentCatalog } from "$lib/state/agents.svelte";
 import { modelPrefs } from "$lib/state/model-prefs.svelte";
@@ -10,6 +10,7 @@ import { uploadAttachments } from "$lib/state/attachments";
 export async function startChat(
   text: string,
   agentId: AgentId,
+  mode: ConversationMode,
   files?: File[],
   projectId?: string,
   mediaIds?: string[],
@@ -18,6 +19,7 @@ export async function startChat(
   const { data: created, error } = await api.api.conversations.post({
     title: "New Chat",
     agentId,
+    mode,
     ...(projectId ? { projectId } : {}),
     ...(Object.keys(configOptions).length > 0 ? { configOptions } : {}),
   });

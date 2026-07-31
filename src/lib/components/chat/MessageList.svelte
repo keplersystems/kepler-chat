@@ -9,9 +9,12 @@
   interface Props {
     messages: MessageView[];
     isStreaming?: boolean;
+    onEdit?: (message: MessageView, text: string) => void;
+    onRegenerate?: (message: MessageView) => void;
+    onBranchAt?: (message: MessageView) => void;
   }
 
-  let { messages, isStreaming = false }: Props = $props();
+  let { messages, isStreaming = false, onEdit, onRegenerate, onBranchAt }: Props = $props();
 
   let viewport: HTMLElement | null = $state(null);
   let atBottom = $state(true);
@@ -53,6 +56,9 @@
           <MessageBubble
             {message}
             streaming={isStreaming && message.id === lastMessageId && message.role === "assistant"}
+            {onEdit}
+            {onRegenerate}
+            {onBranchAt}
           />
         </div>
       {/each}

@@ -175,7 +175,7 @@ function createChatStore() {
   /** Open a turn endpoint and render its SSE body, echoing the submission meanwhile. */
   async function startTurn(
     conversationId: string,
-    echoParts: MessageView["parts"],
+    echoParts: MessageView["parts"] | null,
     path: string,
     body: unknown,
     onTitle?: (title: string) => void,
@@ -185,12 +185,10 @@ function createChatStore() {
     const controller = new AbortController();
     controllers.set(conversationId, controller);
 
-    const stream = createMessageStream(streamEffects(conversationId, onTitle), {
-      id: "echo",
-      role: "user",
-      parts: echoParts,
-      createdAt: Date.now(),
-    });
+    const stream = createMessageStream(
+      streamEffects(conversationId, onTitle),
+      echoParts ? { id: "echo", role: "user", parts: echoParts, createdAt: Date.now() } : null,
+    );
     writeStreaming(conversationId, stream.visible());
 
     return runStream(conversationId, controller, stream, async () => {
@@ -230,6 +228,37 @@ function createChatStore() {
       });
     }
     return startTurn(conversationId, echoParts, "messages", input, onTitle);
+  }
+
+  /** Rewind to a user message and resend it with new text (per-engine rewind). */
+  function editMessage(
+    conversationId: string,
+    messageId: string,
+    text: string,
+    onTitle?: (title: string) => void,
+  ): Promise<boolean> {
+    return startTurn(
+      conversationId,
+      [{ id: "echo-text", type: "text", text }],
+      `messages/${encodeURIComponent(messageId)}/edit`,
+      { text },
+      onTitle,
+    );
+  }
+
+  /** Rewind past an assistant message and re-run the turn that produced it. */
+  function regenerateMessage(
+    conversationId: string,
+    messageId: string,
+    onTitle?: (title: string) => void,
+  ): Promise<boolean> {
+    return startTurn(
+      conversationId,
+      null,
+      `messages/${encodeURIComponent(messageId)}/regenerate`,
+      {},
+      onTitle,
+    );
   }
 
   /** Run an agent-advertised slash command as a turn. */
@@ -302,6 +331,8 @@ function createChatStore() {
     removePendingRequest,
     setError,
     send,
+    editMessage,
+    regenerateMessage,
     runCommand,
     attach,
     stop,

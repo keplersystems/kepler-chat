@@ -9,7 +9,13 @@
   import { flattenSelectValues } from '$lib/state/session-config.svelte';
   import { isModelOption } from "$lib/contracts";
 import { acceptsModality, fileModality, type ModelInfo } from '$lib/contracts';
-  import type { AgentCommand, AgentId, MediaDTO, SessionConfigDTO } from '$lib/contracts';
+  import type {
+    AgentCommand,
+    AgentId,
+    ConversationMode,
+    MediaDTO,
+    SessionConfigDTO,
+  } from '$lib/contracts';
   import ArrowUpIcon from '@lucide/svelte/icons/arrow-up';
   import ImagesIcon from '@lucide/svelte/icons/images';
   import UploadIcon from '@lucide/svelte/icons/upload';
@@ -30,6 +36,11 @@ import { acceptsModality, fileModality, type ModelInfo } from '$lib/contracts';
     /** Rendered only for a new conversation, where the agent is still selectable. */
     agentId?: AgentId | null;
     onAgentChange?: (agentId: AgentId) => void;
+    /** Rendered only for a new conversation; per-conversation mode is immutable. */
+    mode?: ConversationMode | null;
+    onModeSelect?: (mode: ConversationMode) => void;
+    /** False when the selected agent has no chat mode; the toggle locks to Agent. */
+    chatModeAvailable?: boolean;
     text?: string;
     contextUsed?: number;
     contextSize?: number;
@@ -49,6 +60,9 @@ import { acceptsModality, fileModality, type ModelInfo } from '$lib/contracts';
     onConfigChange,
     agentId = null,
     onAgentChange,
+    mode = null,
+    onModeSelect,
+    chatModeAvailable = true,
     text = $bindable(''),
     contextUsed = 0,
     contextSize = 0,
@@ -354,6 +368,31 @@ import { acceptsModality, fileModality, type ModelInfo } from '$lib/contracts';
           >
             {contextPct}% ctx
           </span>
+        {/if}
+
+        {#if onModeSelect && mode}
+          <div
+            class="flex shrink-0 items-center rounded-lg bg-muted/60 p-0.5 text-xs"
+            role="radiogroup"
+            aria-label="Conversation mode"
+          >
+            {#each ["chat", "agent"] as const as value (value)}
+              {@const locked = value === "chat" && !chatModeAvailable}
+              <button
+                type="button"
+                role="radio"
+                aria-checked={mode === value}
+                disabled={disabled || locked}
+                title={locked ? "This agent has no chat mode" : undefined}
+                onclick={() => onModeSelect?.(value)}
+                class="rounded-md px-2 py-1 capitalize transition-colors {mode === value
+                  ? 'bg-background text-foreground shadow-xs'
+                  : 'text-muted-foreground hover:text-foreground'} disabled:opacity-40"
+              >
+                {value}
+              </button>
+            {/each}
+          </div>
         {/if}
 
         {#if onAgentChange}

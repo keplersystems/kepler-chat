@@ -27,6 +27,7 @@
     "@libsql/client": "0.15.15",
     "@lobehub/icons-static-svg": "^1.88.0",
     "@lucide/svelte": "^1.11.0",
+    "@opencode-ai/sdk": "1.18.10",
     "@t3-oss/env-core": "^0.13.4",
     "bits-ui": "^2.18.0",
     "clsx": "^2.1.1",
