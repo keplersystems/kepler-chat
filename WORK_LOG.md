@@ -1,6 +1,69 @@
 # Work Log
 
-## 2026-07-31 — Native multi-SDK engine migration (in progress)
+## 2026-07-31 — Native migration COMPLETE except final browser pass (HANDOFF)
+
+All three native drivers are LIVE, wired, and matrix-verified on branch
+`sdk-engines` (pushed, head 8be2a7c). ACP is deleted; its state is preserved on
+pushed branch `acp-engine`. Conversation modes are **chat | work** (renamed
+from agent, migration 0007).
+
+**Verified per engine** (matrix script /tmp/claude-1000/kepler-probe2/verify-matrix.sh,
+usage: `verify-matrix.sh <agent> <mode> [model]`; needs dev server on :5199 and
+the cookie file next to it — regenerate cookie from KEPLER_PASSCODE sha256 as
+in src/lib/server/auth.ts):
+- claude chat 7/7; claude work 6/7; codex chat+work 6/7 each; opencode chat 4/7,
+  work 5/7. EVERY failure was re-tested in isolation and passed: cancel/reattach
+  fails are the fixed-sleep race vs fast models (deepseek wrote the whole
+  essay before the abort — 11k words in the sse capture), opencode branch flake
+  passed manually, claude/work "BLUE, OWL" branch flake did NOT reproduce in two
+  targeted repros incl. the exact double-rewind sequence — WATCH ITEM: if a
+  branch ever ignores its anchor again, suspect resumeSessionAt across fork
+  generations and re-anchor on the newest generation.
+- Permission round-trips verified live: claude Write allow → file created;
+  codex shell approval (accept/acceptForSession/decline) → file created.
+- Edit/regenerate/branch verified with true truncation on all three engines
+  (claude fork_pending deferred forks; codex thread/fork lastTurnId; opencode
+  revert + fork+moveSession).
+
+**Chat mode surface** (user-directed): websearch/webfetch + skills + MCP on
+all engines; claude uses tools whitelist [WebSearch, WebFetch, Skill, Read] +
+skills:'all' + settingSources ["project"] (project-level only — user-level
+~/.claude config stays excluded, that leak is fixed); opencode chat agent
+permission {"*":"deny", websearch/webfetch/skill allow} via
+OPENCODE_CONFIG_CONTENT; codex chat = read-only sandbox + never-approve +
+developerInstructions.
+
+**Inline interactive visuals** (claude.ai-style, user showed the downloaded
+artifact /home/aun/Downloads/solar_farm_4mw_feasibility_sabarkantha.html —
+KEY INSIGHT: claude.ai emits HTML FRAGMENTS styled with host CSS variables
+(--color-background-secondary etc.), vanilla JS + Chart.js from cdnjs):
+- Shared prompt guidance engine/core/prompts.ts (VISUAL_FRAGMENT_GUIDANCE),
+  composed into all three chat prompts.
+- components/markdown/InlineVisual.svelte renders ```html blocks: sandboxed
+  iframe (allow-scripts only), CSP allows inline JS/CSS + scripts from
+  cdnjs/jsdelivr/unpkg, connect-src 'none'; theme bridge injects Kepler's
+  computed CSS vars + claude.ai-alias names; postMessage auto-height
+  (token-keyed); transparent background; hover-revealed code toggle;
+  streaming guard = 400ms settle debounce.
+- Generation verified over API (sonnet produced fragment-style calculator);
+  **RENDERING NOT YET BROWSER-VERIFIED** — see next steps.
+
+**NEXT STEPS (in order)**
+1. Browser pass (agent-browser skill, dev server :5199, login with
+   KEPLER_PASSCODE from .env): open conversation in
+   /tmp/claude-1000/kepler-probe2/visual-conv.txt — verify InlineVisual renders
+   (iframe present, height >200, theme-matched, slider interaction works);
+   then general sweep: mode toggle on new-chat, message action buttons
+   (edit pencil on user msgs, regenerate + branch on assistant msgs),
+   permission dialog, agents settings page, console errors.
+2. opencode agent-mode permission round-trip test (not yet exercised;
+   permission.asked event path implemented by driver agent, smoke-tested).
+3. Known gaps, decide or defer: project-scope MCP for opencode (config-content
+   can't express it; note in connectors UI?); codex commands=false (no slash
+   commands); visuals quality on deepseek/gpt models unassessed.
+4. Consider merging sdk-engines → main after browser pass.
+
+## 2026-07-31 — Native multi-SDK engine migration (superseded by entry above)
 
 ACP proved to be a lowest-common-denominator: every feature lost in the ACP
 migration (revert, edit, branch-at-message, MCP status, model catalogs) died at
