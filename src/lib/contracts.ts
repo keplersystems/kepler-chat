@@ -1,29 +1,82 @@
 // Shared DTOs and SSE envelope types describing the wire between the Elysia
-// API and any client. The engine speaks ACP; where a wire shape is literally
-// an ACP schema type it is imported type-only from the SDK, everything else is
-// Kepler-owned.
+// API and any client. Every type here is Kepler-owned; engine drivers
+// translate their native SDK shapes into these.
 
-import type {
-  ElicitationSchema,
-  PermissionOptionKind,
-  PlanEntry,
-  SessionConfigOption,
-  SessionMode,
-  StopReason,
-  ToolCallLocation,
-  ToolKind,
-} from "@agentclientprotocol/sdk";
+export type ToolKind =
+  | "read"
+  | "edit"
+  | "delete"
+  | "move"
+  | "search"
+  | "execute"
+  | "think"
+  | "fetch"
+  | "switch_mode"
+  | "other";
 
-export type {
-  ElicitationSchema,
-  PermissionOptionKind,
-  PlanEntry,
-  SessionConfigOption,
-  SessionMode,
-  StopReason,
-  ToolCallLocation,
-  ToolKind,
-};
+export interface ToolCallLocation {
+  path: string;
+  line?: number | null;
+}
+
+export type StopReason =
+  | "end_turn"
+  | "max_tokens"
+  | "max_turn_requests"
+  | "refusal"
+  | "cancelled";
+
+export type PermissionOptionKind =
+  | "allow_once"
+  | "allow_always"
+  | "reject_once"
+  | "reject_always";
+
+export interface PlanEntry {
+  content: string;
+  priority: "high" | "medium" | "low";
+  status: "pending" | "in_progress" | "completed";
+}
+
+export interface SessionConfigSelectOption {
+  value: string;
+  name: string;
+  description?: string | null;
+}
+
+export interface SessionConfigSelectGroup {
+  group: string;
+  name: string;
+  options: SessionConfigSelectOption[];
+}
+
+export type SessionConfigOption = {
+  id: string;
+  name: string;
+  description?: string | null;
+  /** Semantic category; drivers set "model" on the model option. */
+  category?: string | null;
+} & (
+  | {
+      type: "select";
+      currentValue: string;
+      options: SessionConfigSelectOption[] | SessionConfigSelectGroup[];
+    }
+  | { type: "boolean"; currentValue: boolean }
+);
+
+/** JSON-schema subset RequestDialog renders for elicitation forms. */
+export interface ElicitationPropertySchema {
+  type?: "string" | "boolean" | "number" | "integer" | "array" | "object";
+  [key: string]: unknown;
+}
+
+export interface ElicitationSchema {
+  type?: "object";
+  title?: string;
+  properties?: Record<string, ElicitationPropertySchema>;
+  required?: string[];
+}
 
 /** Max length for instruction/skill documents, enforced by API schemas and form inputs. */
 export const INSTRUCTIONS_MAX_LENGTH = 65536;
@@ -38,9 +91,13 @@ export const STOP_REASONS = [
 ] as const satisfies readonly StopReason[];
 export type AgentId = (typeof AGENT_IDS)[number];
 
+export const CONVERSATION_MODES = ["chat", "agent"] as const;
+export type ConversationMode = (typeof CONVERSATION_MODES)[number];
+
 export interface ConversationDTO {
   id: string;
   agent_id: AgentId;
+  mode: ConversationMode;
   project_id: string | null;
   title: string;
   created_at: Date;
@@ -104,6 +161,8 @@ export interface MessageView {
   tokens?: TurnTokens;
   createdAt: number;
   completedAt?: number;
+  /** Native engine message/turn id; anchors edit/regenerate/branch-at-message. */
+  engineMessageId?: string;
 }
 
 export interface SendMessageInput {
@@ -116,11 +175,18 @@ export interface SendMessageInput {
 }
 
 
+/** Per-conversation action gating; the UI offers exactly what the driver supports. */
+export interface SessionActionCapabilities {
+  fork: boolean;
+  forkAtMessage: boolean;
+  editMessage: boolean;
+  regenerate: boolean;
+  compact: boolean;
+}
+
 export interface SessionConfigDTO {
   configOptions: SessionConfigOption[];
-  modes: { currentModeId: string; availableModes: SessionMode[] } | null;
-  /** Agent-advertised session capabilities the UI must not offer without. */
-  capabilities: { fork: boolean };
+  capabilities: SessionActionCapabilities;
 }
 
 /**
@@ -238,13 +304,18 @@ export interface SkillEntry {
 export const MCP_NAME_PATTERN = /^[a-zA-Z0-9][a-zA-Z0-9_-]*$/;
 export const SKILL_NAME_PATTERN = /^[a-z0-9]+(-[a-z0-9]+)*$/;
 
-/** What an agent advertised at initialize; null until it has been started once. */
+/** Static per-engine capability descriptor, mirrored from the driver. */
 export interface AgentCapabilitiesDTO {
+  chatMode: boolean;
   fork: boolean;
-  resume: boolean;
-  list: boolean;
-  images: boolean;
-  mcpHttp: boolean;
+  forkAtMessage: boolean;
+  editMessage: boolean;
+  regenerate: boolean;
+  revertInPlace: boolean;
+  modelCatalog: boolean;
+  mcpStatus: boolean;
+  compact: boolean;
+  commands: boolean;
 }
 
 export interface AgentStatusDTO {
@@ -254,10 +325,10 @@ export interface AgentStatusDTO {
   available: boolean;
   running: boolean;
   version: string | null;
-  /** Human instructions for out-of-band login, from the agent's authMethods. */
+  /** Human instructions for out-of-band login. */
   authHint: string | null;
   envKeys: string[];
-  capabilities: AgentCapabilitiesDTO | null;
+  capabilities: AgentCapabilitiesDTO;
 }
 
 

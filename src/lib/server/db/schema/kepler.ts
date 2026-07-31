@@ -1,5 +1,5 @@
 import { relations, sql } from "drizzle-orm";
-import { AGENT_IDS, STOP_REASONS } from "$lib/contracts";
+import { AGENT_IDS, CONVERSATION_MODES, STOP_REASONS } from "$lib/contracts";
 import {
   index,
   integer,
@@ -41,13 +41,15 @@ export const conversation = sqliteTable(
   {
     id: text("id").primaryKey(),
     agent_id: text("agent_id", { enum: AGENT_IDS }).notNull(),
-    acp_session_id: text("acp_session_id"),
+    mode: text("mode", { enum: CONVERSATION_MODES }).notNull().default("agent"),
+    engine_session_id: text("engine_session_id"),
+    /** JSON {sessionId, anchor?}: deferred fork consumed on the next turn (claude). */
+    fork_pending: text("fork_pending"),
     project_id: text("project_id").references(() => project.id, {
       onDelete: "cascade",
     }),
     title: text("title").notNull(),
     model_value: text("model_value"),
-    mode_id: text("mode_id"),
     /** JSON map of chosen session config option ids to values, reapplied per session. */
     config_options: text("config_options"),
     context_used: integer("context_used"),
@@ -69,6 +71,8 @@ export const message = sqliteTable(
       .notNull()
       .references(() => conversation.id, { onDelete: "cascade" }),
     role: text("role", { enum: ["user", "assistant"] }).notNull(),
+    /** Native engine message/turn id; anchors fork/edit/regenerate. */
+    engine_message_id: text("engine_message_id"),
     stop_reason: text("stop_reason", { enum: STOP_REASONS }),
     error: text("error"),
     model_value: text("model_value"),

@@ -1,5 +1,4 @@
 import { and, eq } from "drizzle-orm";
-import type { McpServer } from "@agentclientprotocol/sdk";
 import { db } from "$lib/server/db/client";
 import { mcpServer } from "$lib/server/db/schema/kepler";
 import type { McpServerConfig, McpServerEntry } from "$lib/contracts";
@@ -44,35 +43,34 @@ export async function removeMcpServer(name: string, projectId: string | null): P
     .where(and(eq(mcpServer.name, name), eq(mcpServer.project_id, scopeKey(projectId))));
 }
 
+export type ResolvedMcpTransport =
+  | { type: "stdio"; command: string; args: string[]; env: Record<string, string> }
+  | { type: "http"; url: string; headers: Record<string, string> };
+
+export interface ResolvedMcpServer {
+  name: string;
+  transport: ResolvedMcpTransport;
+}
+
 /**
- * ACP-shaped MCP list for session establishment. Sorted by name and shape-stable:
- * claude-agent-acp tears down its session when this fingerprint changes.
+ * Engine-neutral MCP list for session establishment, sorted by name so the
+ * set is shape-stable across calls; each driver maps it to its native config.
  */
-export async function resolveAcpMcpServers(projectId: string | null): Promise<McpServer[]> {
+export async function resolveMcpServers(projectId: string | null): Promise<ResolvedMcpServer[]> {
   const entries = await listMcpServers(projectId);
-  const servers: McpServer[] = [];
+  const servers: ResolvedMcpServer[] = [];
   for (const entry of entries) {
     if (entry.config.enabled === false) continue;
     if (entry.config.type === "local") {
       const [command, ...args] = entry.config.command;
       servers.push({
         name: entry.name,
-        command,
-        args,
-        env: Object.entries(entry.config.environment ?? {}).map(([name, value]) => ({
-          name,
-          value,
-        })),
+        transport: { type: "stdio", command, args, env: entry.config.environment ?? {} },
       });
     } else {
       servers.push({
-        type: "http",
         name: entry.name,
-        url: entry.config.url,
-        headers: Object.entries(entry.config.headers ?? {}).map(([name, value]) => ({
-          name,
-          value,
-        })),
+        transport: { type: "http", url: entry.config.url, headers: entry.config.headers ?? {} },
       });
     }
   }

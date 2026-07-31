@@ -5,7 +5,7 @@ import {
   listPendingRequests,
   replyElicitation,
   replyPermission,
-} from "$lib/server/acp/requests";
+} from "$lib/server/engine/core/requests";
 
 export const requestsRoute = new Elysia({ prefix: "/api/conversations" })
   .get(

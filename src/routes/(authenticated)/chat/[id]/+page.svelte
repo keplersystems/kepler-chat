@@ -269,7 +269,6 @@ import type {
           contextUsed={usage?.used ?? 0}
           contextSize={usage?.size ?? 0}
           onConfigChange={handleConfigChange}
-          onModeChange={(modeId) => void sessionConfig.setMode(conversationId, modeId)}
           {commands}
           onCommand={handleCommand}
           onSubmit={handleSendMessage}

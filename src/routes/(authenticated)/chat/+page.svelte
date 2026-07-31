@@ -60,7 +60,6 @@
     if (!config) return null;
     return {
       ...config,
-      modes: null,
       configOptions: config.configOptions.map((option) =>
         option.type === "select" && selectedOptions[option.id]
           ? { ...option, currentValue: selectedOptions[option.id] }

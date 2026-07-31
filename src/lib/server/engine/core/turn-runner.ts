@@ -1,20 +1,15 @@
-import { readFile } from "node:fs/promises";
+// Engine-agnostic turn orchestration: persists the user message, hands the
+// driver a TurnSink, persists streamed parts incrementally, normalizes
+// usage/cost, and broadcasts Kepler SSE events from the replayable log.
+
 import { basename } from "node:path";
-import { pathToFileURL } from "node:url";
-import type {
-  ContentBlock,
-  SessionUpdate,
-  ToolCallUpdate,
-  Usage,
-} from "@agentclientprotocol/sdk";
 import { eq } from "drizzle-orm";
 import { downloadFileUrl, isModelOption } from "$lib/contracts";
-import type { MessageView,
+import type {
+  MessageView,
   PartView,
   SendMessageInput,
-  SessionUsageDTO,
   StopReason,
-  ToolContentView,
   TurnTokens,
 } from "$lib/contracts";
 import { db } from "$lib/server/db/client";
@@ -27,17 +22,14 @@ import {
 } from "$lib/server/files";
 import { HttpError } from "$lib/server/http-error";
 import { generateId } from "$lib/server/ids";
-import { getConversationInputPath, getConversationRoot } from "$lib/server/paths";
-import {
-  cancelSession,
-  ensureSession,
-  listAgentSessions,
-  promptSession,
-  sessionCommandsFor,
-  sessionConfigFor,
-  subscribeUpdates,
-  updateCachedConfig,
-} from "./engine";
+import { getConversationInputPath } from "$lib/server/paths";
+import type {
+  ConversationRow,
+  ResolvedAttachment,
+  ToolPartUpdate,
+  TurnSink,
+} from "../types";
+import { driverFor } from "../registry";
 import { cancelPendingRequests } from "./requests";
 import {
   broadcast,
@@ -47,17 +39,8 @@ import {
   subscribeGeneration,
 } from "./stream-hub";
 
-type ConversationRow = typeof conversation.$inferSelect;
-
 const DELTA_FLUSH_MS = 300;
 const DEFAULT_TITLE = "New Chat";
-const PLACEHOLDER_TITLE = /^(New session - |Child session - )\d{4}-\d{2}-\d{2}/;
-
-const EMBED_TEXT_LIMIT = 262144;
-
-function isRealTitle(title: string | null | undefined): title is string {
-  return !!title?.trim() && !PLACEHOLDER_TITLE.test(title);
-}
 
 interface StreamingPart {
   view: PartView;
@@ -68,6 +51,7 @@ interface StreamingPart {
 class AssistantAccumulator {
   readonly messageId = generateId();
   readonly createdAt = Date.now();
+  engineMessageId: string | null = null;
   private parts: StreamingPart[] = [];
   private announced = false;
   private flushTimer: ReturnType<typeof setInterval> | null = null;
@@ -98,6 +82,7 @@ class AssistantAccumulator {
       parts: this.parts.map((entry) => entry.view),
       modelValue: this.modelValue ?? undefined,
       createdAt: this.createdAt,
+      engineMessageId: this.engineMessageId ?? undefined,
     };
   }
 
@@ -133,7 +118,7 @@ class AssistantAccumulator {
     await this.pushPart({ id: generateId(), type: kind, text });
   }
 
-  async upsertToolCall(update: ToolCallUpdate): Promise<void> {
+  async upsertToolCall(update: ToolPartUpdate): Promise<void> {
     const existing = this.parts.find(
       (entry) => entry.view.type === "tool" && entry.view.toolCallId === update.toolCallId,
     );
@@ -145,7 +130,7 @@ class AssistantAccumulator {
         title: update.title ?? update.toolCallId,
         kind: update.kind ?? "other",
         status: update.status ?? "pending",
-        content: toToolContent(update.content ?? []),
+        content: update.content ?? [],
         locations: update.locations ?? [],
         rawInput: update.rawInput,
         rawOutput: update.rawOutput,
@@ -156,7 +141,7 @@ class AssistantAccumulator {
     if (update.title != null) view.title = update.title;
     if (update.kind != null) view.kind = update.kind;
     if (update.status != null) view.status = update.status;
-    if (update.content != null) view.content = toToolContent(update.content);
+    if (update.content != null) view.content = update.content;
     if (update.locations != null) view.locations = update.locations;
     if (update.rawInput !== undefined) view.rawInput = update.rawInput;
     if (update.rawOutput !== undefined) view.rawOutput = update.rawOutput;
@@ -223,6 +208,7 @@ class AssistantAccumulator {
     await db
       .update(message)
       .set({
+        engine_message_id: this.engineMessageId,
         stop_reason: fields.stopReason,
         error: fields.error ?? null,
         cost: fields.cost ?? null,
@@ -241,25 +227,6 @@ class AssistantAccumulator {
   }
 }
 
-function toToolContent(content: NonNullable<ToolCallUpdate["content"]>): ToolContentView[] {
-  const views: ToolContentView[] = [];
-  for (const item of content) {
-    if (item.type === "content" && item.content.type === "text") {
-      views.push({ type: "text", text: item.content.text });
-    } else if (item.type === "diff") {
-      views.push({
-        type: "diff",
-        path: item.path,
-        oldText: item.oldText,
-        newText: item.newText,
-      });
-    } else if (item.type === "terminal") {
-      views.push({ type: "text", text: `[terminal ${item.terminalId}]` });
-    }
-  }
-  return views;
-}
-
 function partText(view: PartView): string {
   switch (view.type) {
     case "text":
@@ -272,22 +239,6 @@ function partText(view: PartView): string {
     case "file":
       return view.filename;
   }
-}
-
-function contentText(block: ContentBlock): string {
-  return block.type === "text" ? block.text : "";
-}
-
-function tokensFromUsage(usage: Usage | null | undefined): TurnTokens | null {
-  if (!usage) return null;
-  return {
-    input: usage.inputTokens,
-    output: usage.outputTokens,
-    thought: usage.thoughtTokens ?? undefined,
-    cacheRead: usage.cachedReadTokens ?? undefined,
-    cacheWrite: usage.cachedWriteTokens ?? undefined,
-    total: usage.totalTokens,
-  };
 }
 
 /**
@@ -353,13 +304,6 @@ async function persistUserMessage(
   return { id: messageId, role: "user", parts, createdAt, completedAt: createdAt };
 }
 
-interface ResolvedAttachment {
-  absolutePath: string;
-  relativePath: string;
-  filename: string;
-  mimeType: string;
-}
-
 async function resolveAttachments(
   conv: ConversationRow,
   attachments: NonNullable<SendMessageInput["attachments"]>,
@@ -395,72 +339,28 @@ async function resolveAttachments(
   return resolved;
 }
 
-async function buildPromptBlocks(
-  text: string,
-  attachments: ResolvedAttachment[],
-): Promise<ContentBlock[]> {
-  const blocks: ContentBlock[] = [];
-  if (text.trim()) blocks.push({ type: "text", text: text.trim() });
-  for (const attachment of attachments) {
-    const uri = pathToFileURL(attachment.absolutePath).toString();
-    if (attachment.mimeType.startsWith("image/")) {
-      const data = await readFile(attachment.absolutePath);
-      blocks.push({
-        type: "image",
-        data: data.toString("base64"),
-        mimeType: attachment.mimeType,
-      });
-      continue;
-    }
-    const stats = await statOrNull(attachment.absolutePath);
-    const isTextLike =
-      attachment.mimeType.startsWith("text/") ||
-      attachment.mimeType === "application/json" ||
-      attachment.mimeType === "application/octet-stream";
-    if (isTextLike && stats && stats.size <= EMBED_TEXT_LIMIT) {
-      const content = await readFile(attachment.absolutePath, "utf8");
-      if (!content.includes("\0")) {
-        blocks.push({
-          type: "resource",
-          resource: { uri, mimeType: attachment.mimeType, text: content },
-        });
-        continue;
-      }
-    }
-    blocks.push({ type: "resource_link", uri, name: attachment.filename });
-  }
-  return blocks;
-}
-
 interface TurnState {
   cancelled: boolean;
+  controller: AbortController;
 }
 
 const activeTurns = new Map<string, TurnState>();
 
 export async function cancelGeneration(conversationId: string): Promise<void> {
   const state = activeTurns.get(conversationId);
-  if (state) state.cancelled = true;
-  await cancelSession(conversationId);
+  if (!state) return;
+  state.cancelled = true;
+  state.controller.abort();
 }
 
 async function refreshTitle(
   conv: ConversationRow,
-  receivedTitle: string | null,
+  engineTitle: string | null,
   userText: string,
 ): Promise<void> {
-  let title = receivedTitle;
-  if (!title && conv.title === DEFAULT_TITLE) {
-    try {
-      const sessions = await listAgentSessions(conv.agent_id, getConversationRoot(conv));
-      const own = sessions.find((session) => session.sessionId === conv.acp_session_id);
-      if (isRealTitle(own?.title)) title = own.title.trim();
-    } catch {
-      // Title generation is best-effort; fall through to the text fallback.
-    }
-    if (!title && userText.trim()) {
-      title = userText.trim().slice(0, 60);
-    }
+  let title = engineTitle?.trim() || null;
+  if (!title && conv.title === DEFAULT_TITLE && userText.trim()) {
+    title = userText.trim().slice(0, 60);
   }
   if (title && title !== conv.title) {
     await db.update(conversation).set({ title }).where(eq(conversation.id, conv.id));
@@ -470,27 +370,24 @@ async function refreshTitle(
 }
 
 function runTurn(conv: ConversationRow, input: SendMessageInput): void {
-  const state: TurnState = { cancelled: false };
+  const state: TurnState = { cancelled: false, controller: new AbortController() };
   activeTurns.set(conv.id, state);
+  const driver = driverFor(conv.agent_id);
 
   void (async () => {
-    let unsubscribe: (() => void) | null = null;
     let accumulator: AssistantAccumulator | null = null;
-    let receivedTitle: string | null = null;
-    // Boxed so reads after `await updateQueue` see the closure's writes
-    // without TS narrowing the value to its initializer.
-    const lastUsage: { value: SessionUsageDTO | null } = { value: null };
+    let userMessageId: string | null = null;
 
     try {
       const attachments = await resolveAttachments(conv, input.attachments ?? []);
       const userView = await persistUserMessage(conv, input, attachments);
+      userMessageId = userView.id;
       broadcast(conv.id, "message", { message: userView });
 
-      await ensureSession(conv);
-      const config = sessionConfigFor(conv.id);
-      if (config) broadcast(conv.id, "config", config);
+      const config = await driver.ensureSession(conv);
+      broadcast(conv.id, "config", config);
 
-      const modelOption = config?.configOptions.find(
+      const modelOption = config.configOptions.find(
         (option) => isModelOption(option) && option.type === "select",
       );
       const modelValue =
@@ -498,102 +395,66 @@ function runTurn(conv: ConversationRow, input: SendMessageInput): void {
       accumulator = new AssistantAccumulator(conv, modelValue ?? null);
       const acc = accumulator;
 
-      // Updates must apply in arrival order; the handlers await DB writes, so
-      // chain them instead of letting them interleave.
-      let updateQueue: Promise<void> = Promise.resolve();
-      unsubscribe = subscribeUpdates(conv.id, (update: SessionUpdate) => {
-        updateQueue = updateQueue.then(async () => {
-          switch (update.sessionUpdate) {
-            case "agent_message_chunk":
-              await acc.appendText("text", contentText(update.content));
-              break;
-            case "agent_thought_chunk":
-              await acc.appendText("reasoning", contentText(update.content));
-              break;
-            case "tool_call":
-            case "tool_call_update":
-              await acc.upsertToolCall(update);
-              break;
-            case "plan":
-              broadcast(conv.id, "plan", { entries: update.entries });
-              break;
-            case "usage_update": {
-              lastUsage.value = {
-                used: update.used,
-                size: update.size,
-                cost: update.cost?.amount ?? null,
-              };
-              broadcast(conv.id, "usage", lastUsage.value);
-              break;
-            }
-            case "session_info_update":
-              if (isRealTitle(update.title)) receivedTitle = update.title.trim();
-              break;
-            case "current_mode_update": {
-              const updated = updateCachedConfig(conv.id, (current) => ({
-                ...current,
-                modes: current.modes
-                  ? { ...current.modes, currentModeId: update.currentModeId }
-                  : null,
-              }));
-              if (updated) broadcast(conv.id, "config", updated);
-              break;
-            }
-            case "available_commands_update":
-              broadcast(conv.id, "commands", { commands: sessionCommandsFor(conv.id) });
-              break;
-            case "config_option_update": {
-              const updated = updateCachedConfig(conv.id, (current) => ({
-                ...current,
-                configOptions: update.configOptions ?? current.configOptions,
-              }));
-              if (updated) broadcast(conv.id, "config", updated);
-              break;
-            }
-            default:
-              break;
-          }
-        });
-      });
+      const sink: TurnSink = {
+        appendText: (kind, text) => acc.appendText(kind, text),
+        upsertToolCall: (update) => acc.upsertToolCall(update),
+        emit: (event, data) => broadcast(conv.id, event, data),
+        setEngineMessageId: (id) => {
+          acc.engineMessageId = id;
+        },
+        setUserEngineMessageId: (id) => {
+          if (!userMessageId) return;
+          void db
+            .update(message)
+            .set({ engine_message_id: id })
+            .where(eq(message.id, userMessageId));
+        },
+      };
 
-      const blocks = await buildPromptBlocks(input.text, attachments);
-      const response = await promptSession(conv, blocks);
-      await updateQueue;
+      const result = await driver.runTurn(
+        conv,
+        { text: input.text.trim(), attachments },
+        sink,
+        state.controller.signal,
+      );
 
-      const stopReason: StopReason = state.cancelled ? "cancelled" : response.stopReason;
-      const cumulativeTokens = tokensFromUsage(response.usage);
+      const stopReason: StopReason = state.cancelled ? "cancelled" : result.stopReason;
+
       const previousTokens = conv.total_tokens
         ? (JSON.parse(conv.total_tokens) as TurnTokens)
         : null;
-      const tokens = cumulativeTokens
-        ? turnTokenDelta(cumulativeTokens, previousTokens)
+      const tokens = result.tokens
+        ? result.cumulativeTokens
+          ? turnTokenDelta(result.tokens, previousTokens)
+          : result.tokens
         : undefined;
 
-      const usage = lastUsage.value;
-      let costDelta: number | undefined;
-      let newTotalCost = conv.total_cost;
-      if (usage?.cost != null) {
-        costDelta = perTurnDelta(usage.cost, conv.total_cost);
-        newTotalCost = conv.total_cost + costDelta;
-      }
+      let costDelta: number | undefined = result.costUsd ?? undefined;
+      const newTotalCost = conv.total_cost + (costDelta ?? 0);
 
-      const finalView = await accumulator.finalize({
-        stopReason,
-        tokens,
-        cost: costDelta,
-      });
+      const finalView = await accumulator.finalize({ stopReason, tokens, cost: costDelta });
 
       await db
         .update(conversation)
         .set({
-          context_used: usage?.used ?? conv.context_used,
-          context_size: usage?.size ?? conv.context_size,
+          context_used: result.context?.used ?? conv.context_used,
+          context_size: result.context?.size ?? conv.context_size,
           total_cost: newTotalCost,
-          total_tokens: cumulativeTokens ? JSON.stringify(cumulativeTokens) : conv.total_tokens,
+          total_tokens:
+            result.tokens && result.cumulativeTokens
+              ? JSON.stringify(result.tokens)
+              : conv.total_tokens,
         })
         .where(eq(conversation.id, conv.id));
+      if (result.context) {
+        broadcast(conv.id, "usage", {
+          used: result.context.used,
+          size: result.context.size,
+          cost: newTotalCost,
+        });
+      }
 
-      await refreshTitle(conv, receivedTitle, input.text);
+      await refreshTitle(conv, result.title, input.text);
       broadcast(conv.id, "turn.end", { stopReason, message: finalView });
     } catch (error) {
       const messageText = error instanceof Error ? error.message : "Unknown error";
@@ -605,7 +466,6 @@ function runTurn(conv: ConversationRow, input: SendMessageInput): void {
       }
       broadcast(conv.id, "error", { message: messageText });
     } finally {
-      unsubscribe?.();
       cancelPendingRequests(conv.id);
       activeTurns.delete(conv.id);
       finishGeneration(conv.id);

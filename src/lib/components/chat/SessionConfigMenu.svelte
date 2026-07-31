@@ -23,10 +23,9 @@
     modelInfo?: Record<string, ModelInfo>;
     disabled?: boolean;
     onConfigChange?: (configId: string, value: string) => void;
-    onModeChange?: (modeId: string) => void;
   }
 
-  const { config, modelInfo = {}, disabled = false, onConfigChange, onModeChange }: Props =
+  const { config, modelInfo = {}, disabled = false, onConfigChange }: Props =
     $props();
 
   /** Modes are a separate ACP concept but belong with the rest of the controls. */
@@ -50,19 +49,6 @@
         currentValue: option.currentValue,
         apply: (value: string) => onConfigChange?.(option.id, value),
       }));
-    if (config?.modes && config.modes.availableModes.length > 0) {
-      panels.push({
-        id: "__mode",
-        label: "Mode",
-        values: config.modes.availableModes.map((mode) => ({
-          id: mode.id,
-          name: mode.name,
-          description: mode.description,
-        })),
-        currentValue: config.modes.currentModeId,
-        apply: (value: string) => onModeChange?.(value),
-      });
-    }
     return panels;
   });
 

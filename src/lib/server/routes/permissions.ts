@@ -1,7 +1,7 @@
 import { Elysia, t } from "elysia";
 import { PERMISSION_TOOLS, type PermissionTool } from "$lib/contracts";
 import { requireAuth } from "$lib/server/auth";
-import { stopAllAgents } from "$lib/server/acp/engine";
+import { stopAllEngines } from "$lib/server/engine/registry";
 import {
   readPermissionSettings,
   writePermissionSettings,
@@ -37,7 +37,7 @@ export const permissionsRoute = new Elysia({ prefix: "/api/permissions" })
       requireAuth(context);
       await writePermissionSettings(context.body.permissions);
       // Permissions ride on OPENCODE_PERMISSION, which is read at spawn.
-      await stopAllAgents();
+      await stopAllEngines();
       return { success: true };
     },
     {

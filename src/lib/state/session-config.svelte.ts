@@ -65,19 +65,6 @@ function createSessionConfigStore() {
     saving = false;
   }
 
-  async function setMode(conversationId: string, modeId: string) {
-    saving = true;
-    const { data, error: saveError } = await request(
-      api.api.conversations({ id: conversationId }).mode.put({ modeId }),
-      "Failed to switch mode",
-    );
-    error = saveError;
-    if (data) {
-      if (data.config) chat.setConfig(conversationId, data.config);
-    }
-    saving = false;
-  }
-
   return {
     get modelInfo() {
       return modelInfo;
@@ -90,7 +77,6 @@ function createSessionConfigStore() {
     },
     load,
     setOption,
-    setMode,
   };
 }
 

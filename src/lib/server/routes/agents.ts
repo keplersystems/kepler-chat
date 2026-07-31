@@ -1,9 +1,9 @@
 import { Elysia, t } from "elysia";
 import { AGENT_IDS, type AgentId } from "$lib/contracts";
 import { requireAuth } from "$lib/server/auth";
-import { agentConfig, hostFor } from "$lib/server/acp/engine";
-import { modelInfoForConfig, providerEnvVars } from "$lib/server/acp/catalog";
-import { deleteAgentEnvValue, setAgentEnvValue } from "$lib/server/acp/env-profiles";
+import { driverFor } from "$lib/server/engine/registry";
+import { modelInfoForConfig, providerEnvVars } from "$lib/server/engine/core/catalog";
+import { deleteAgentEnvValue, setAgentEnvValue } from "$lib/server/engine/core/env-profiles";
 import { listAgentStatuses } from "$lib/server/agents";
 import { HttpError } from "$lib/server/http-error";
 
@@ -34,7 +34,7 @@ export const agentsRoute = new Elysia({ prefix: "/api/agents" })
     async (context) => {
       requireAuth(context);
       const agentId = requireAgentId(context.params.agentId);
-      const config = await agentConfig(agentId, context.query.model || undefined);
+      const config = await driverFor(agentId).agentConfig("agent", context.query.model || undefined);
       return { config, modelInfo: await modelInfoForConfig(agentId, config) };
     },
     {
@@ -69,7 +69,7 @@ export const agentsRoute = new Elysia({ prefix: "/api/agents" })
       const agentId = requireAgentId(context.params.agentId);
       await setAgentEnvValue(agentId, context.body.key, context.body.value);
       // Env applies at next spawn.
-      await hostFor(agentId).stop();
+      await driverFor(agentId).stop();
       return { success: true as const };
     },
     {
@@ -91,7 +91,7 @@ export const agentsRoute = new Elysia({ prefix: "/api/agents" })
       requireAuth(context);
       const agentId = requireAgentId(context.params.agentId);
       await deleteAgentEnvValue(agentId, context.params.key);
-      await hostFor(agentId).stop();
+      await driverFor(agentId).stop();
       return { success: true as const };
     },
     {
@@ -108,7 +108,7 @@ export const agentsRoute = new Elysia({ prefix: "/api/agents" })
     async (context) => {
       requireAuth(context);
       const agentId = requireAgentId(context.params.agentId);
-      await hostFor(agentId).stop();
+      await driverFor(agentId).stop();
       return { success: true as const };
     },
     {

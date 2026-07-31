@@ -1,5 +1,5 @@
 import { Elysia, t } from "elysia";
-import { AGENT_IDS } from "$lib/contracts";
+import { AGENT_IDS, CONVERSATION_MODES } from "$lib/contracts";
 import { db } from "$lib/server/db/client";
 import { requireAuth } from "$lib/server/auth";
 import {
@@ -33,6 +33,7 @@ export const conversationsRoute = new Elysia({ prefix: "/api/conversations" })
       requireAuth(context);
       return createConversation(
         context.body.agentId,
+        context.body.mode ?? "agent",
         context.body.title,
         context.body.projectId ?? null,
         context.body.configOptions ?? {},
@@ -41,6 +42,7 @@ export const conversationsRoute = new Elysia({ prefix: "/api/conversations" })
     {
       body: t.Object({
         agentId: t.UnionEnum([...AGENT_IDS]),
+        mode: t.Optional(t.UnionEnum([...CONVERSATION_MODES])),
         title: t.String({ minLength: 1, maxLength: 255 }),
         projectId: t.Optional(t.String({ minLength: 1 })),
         configOptions: t.Optional(t.Record(t.String(), t.String())),
@@ -71,10 +73,11 @@ export const conversationsRoute = new Elysia({ prefix: "/api/conversations" })
     "/:id/branch",
     async (context) => {
       requireAuth(context);
-      return branchConversation(context.params.id);
+      return branchConversation(context.params.id, context.body?.atMessageId);
     },
     {
       params: t.Object({ id: t.String() }),
+      body: t.Optional(t.Object({ atMessageId: t.Optional(t.String({ minLength: 1 })) })),
       detail: {
         summary: "Branch conversation",
         tags: ["Conversations"],

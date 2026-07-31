@@ -1,6 +1,6 @@
 import type { Handle } from "@sveltejs/kit";
 import { isAuthenticated } from "$lib/server/auth";
-import { stopAllAgents } from "$lib/server/acp/engine";
+import { stopAllEngines } from "$lib/server/engine/registry";
 
 declare global {
   // eslint-disable-next-line no-var
@@ -12,7 +12,7 @@ if (!globalThis.__KEPLER_BOOTED__) {
 
   const shutdown = async () => {
     try {
-      await stopAllAgents();
+      await stopAllEngines();
     } finally {
       process.exit(0);
     }

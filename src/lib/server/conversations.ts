@@ -1,7 +1,7 @@
 import { cp, rm } from "node:fs/promises";
 import { eq } from "drizzle-orm";
-import type { AgentId } from "$lib/contracts";
-import { deleteSessionFor, forkSession } from "$lib/server/acp/engine";
+import type { AgentId, ConversationMode } from "$lib/contracts";
+import { driverFor } from "$lib/server/engine/registry";
 import { db } from "$lib/server/db/client";
 import { conversation, message, part } from "$lib/server/db/schema/kepler";
 import { HttpError } from "$lib/server/http-error";
@@ -17,6 +17,7 @@ export type ConversationRow = typeof conversation.$inferSelect;
 
 export async function createConversation(
   agentId: AgentId,
+  mode: ConversationMode,
   title: string,
   projectId: string | null = null,
   configOptions: Record<string, string> = {},
@@ -31,6 +32,7 @@ export async function createConversation(
       .values({
         id: locator.id,
         agent_id: agentId,
+        mode,
         project_id: projectId,
         title,
         model_value: configOptions.model ?? null,
@@ -46,33 +48,58 @@ export async function createConversation(
 
 /**
  * Branch a conversation: copy its working directory (so file state matches the
- * transcript), copy the message history, and fork the agent's session so the
- * branch inherits its context. Agents without fork cannot express this, so the
- * caller must not offer it for them — a memoryless copy would be a lie.
+ * transcript), copy the message history up to the anchor, and fork the
+ * engine's session so the branch inherits its context. `atMessageId` (a
+ * Kepler message id) branches at that message; omitted branches at head.
  */
-export async function branchConversation(id: string): Promise<ConversationRow> {
+export async function branchConversation(
+  id: string,
+  atMessageId?: string,
+): Promise<ConversationRow> {
   const source = await requireConversation(id);
+  const driver = driverFor(source.agent_id);
   const locator: ConversationLocator = { id: generateId(), project_id: source.project_id };
   const root = getConversationRoot(locator);
+
+  const messages = await db.query.message.findMany({
+    where: (fields, { eq: eqOp }) => eqOp(fields.conversation_id, id),
+    orderBy: (fields, { asc }) => [asc(fields.created_at)],
+  });
+  let kept = messages;
+  let anchorEngineId: string | undefined;
+  if (atMessageId) {
+    const anchorIndex = messages.findIndex((row) => row.id === atMessageId);
+    if (anchorIndex === -1) throw new HttpError(404, "Message not found");
+    const anchor = messages[anchorIndex];
+    if (!anchor.engine_message_id) {
+      throw new HttpError(400, "This message cannot anchor a branch");
+    }
+    if (!driver.capabilities.forkAtMessage) {
+      throw new HttpError(400, "This agent cannot branch at a message");
+    }
+    kept = messages.slice(0, anchorIndex + 1);
+    anchorEngineId = anchor.engine_message_id;
+  } else if (!driver.capabilities.fork) {
+    throw new HttpError(400, "This agent cannot branch a conversation");
+  }
 
   try {
     await cp(getConversationRoot(source), root, { recursive: true });
 
-    const forkedSessionId = await forkSession(source, { ...source, id: locator.id });
-    if (!forkedSessionId) {
-      throw new HttpError(400, "This agent cannot branch a conversation");
-    }
+    const fork = await driver.forkSession(source, { ...source, id: locator.id }, anchorEngineId);
 
     const [row] = await db
       .insert(conversation)
       .values({
         id: locator.id,
         agent_id: source.agent_id,
-        acp_session_id: forkedSessionId,
+        mode: source.mode,
+        engine_session_id: fork.engineSessionId,
+        fork_pending: fork.forkPending,
         project_id: source.project_id,
         title: `${source.title} (branch)`,
         model_value: source.model_value,
-        mode_id: source.mode_id,
+        config_options: source.config_options,
         context_used: source.context_used,
         context_size: source.context_size,
         total_cost: source.total_cost,
@@ -80,16 +107,16 @@ export async function branchConversation(id: string): Promise<ConversationRow> {
       })
       .returning();
 
-    const messages = await db.query.message.findMany({
-      where: (fields, { eq: eqOp }) => eqOp(fields.conversation_id, id),
-    });
-    const parts = await db.query.part.findMany({
-      where: (fields, { eq: eqOp }) => eqOp(fields.conversation_id, id),
-    });
-    const messageIdMap = new Map(messages.map((row) => [row.id, generateId()]));
-    if (messages.length > 0) {
+    const keptIds = new Set(kept.map((row) => row.id));
+    const parts = (
+      await db.query.part.findMany({
+        where: (fields, { eq: eqOp }) => eqOp(fields.conversation_id, id),
+      })
+    ).filter((row) => keptIds.has(row.message_id));
+    const messageIdMap = new Map(kept.map((row) => [row.id, generateId()]));
+    if (kept.length > 0) {
       await db.insert(message).values(
-        messages.map((row) => ({
+        kept.map((row) => ({
           ...row,
           id: messageIdMap.get(row.id)!,
           conversation_id: locator.id,
@@ -136,9 +163,11 @@ export async function deleteConversation(id: string): Promise<void> {
   const conv = await requireConversation(id);
   // Best effort: an unreachable agent must not block filesystem and DB
   // teardown — delete stays idempotent.
-  await deleteSessionFor(conv).catch((err) => {
-    console.warn(`ACP session cleanup failed for conversation ${id}:`, err);
-  });
+  await driverFor(conv.agent_id)
+    .deleteSession(conv)
+    .catch((err) => {
+      console.warn(`Engine session cleanup failed for conversation ${id}:`, err);
+    });
   await rm(getConversationRoot(conv), { recursive: true, force: true });
   await db.delete(part).where(eq(part.conversation_id, id));
   await db.delete(message).where(eq(message.conversation_id, id));

@@ -1,11 +1,13 @@
 import { mkdir, readFile, writeFile } from "node:fs/promises";
 import { dirname, resolve } from "node:path";
+import { isModelOption } from "$lib/contracts";
 import type {
+  AgentId,
+  ModelInfo,
+  SessionConfigDTO,
   SessionConfigSelectGroup,
   SessionConfigSelectOption,
-} from "@agentclientprotocol/sdk";
-import { isModelOption } from "$lib/contracts";
-import type { AgentId, ModelInfo, SessionConfigDTO } from "$lib/contracts";
+} from "$lib/contracts";
 import { getSessionsRoot } from "$lib/server/paths";
 
 interface CatalogModel {

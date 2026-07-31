@@ -1,8 +1,8 @@
 import { Elysia, t } from "elysia";
 import { requireAuth } from "$lib/server/auth";
 import { requireConversation } from "$lib/server/conversations";
-import { awaitSessionCommands, ensureSession } from "$lib/server/acp/engine";
-import { sendCommandStream } from "$lib/server/acp/pump";
+import { driverFor } from "$lib/server/engine/registry";
+import { sendCommandStream } from "$lib/server/engine/core/turn-runner";
 
 export const commandsRoute = new Elysia({ prefix: "/api/conversations" })
   .get(
@@ -10,8 +10,9 @@ export const commandsRoute = new Elysia({ prefix: "/api/conversations" })
     async (context) => {
       requireAuth(context);
       const conv = await requireConversation(context.params.id);
-      await ensureSession(conv);
-      return { commands: await awaitSessionCommands(conv.id) };
+      const driver = driverFor(conv.agent_id);
+      await driver.ensureSession(conv);
+      return { commands: await driver.listCommands(conv) };
     },
     {
       params: t.Object({ id: t.String() }),

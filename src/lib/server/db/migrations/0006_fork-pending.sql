@@ -1,0 +1,1 @@
+ALTER TABLE `conversation` ADD `fork_pending` text;

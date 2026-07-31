@@ -16,6 +16,7 @@ function toView(row: MessageRow, parts: PartRow[]): MessageView {
     modelValue: row.model_value ?? undefined,
     cost: row.cost ?? undefined,
     tokens: row.tokens ? (JSON.parse(row.tokens) as TurnTokens) : undefined,
+    engineMessageId: row.engine_message_id ?? undefined,
     createdAt: row.created_at.getTime(),
     completedAt: row.completed_at?.getTime(),
   };

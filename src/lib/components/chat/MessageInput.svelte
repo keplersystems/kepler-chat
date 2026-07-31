@@ -27,7 +27,6 @@ import { acceptsModality, fileModality, type ModelInfo } from '$lib/contracts';
     config?: SessionConfigDTO | null;
     modelInfo?: Record<string, ModelInfo>;
     onConfigChange?: (configId: string, value: string) => void;
-    onModeChange?: (modeId: string) => void;
     /** Rendered only for a new conversation, where the agent is still selectable. */
     agentId?: AgentId | null;
     onAgentChange?: (agentId: AgentId) => void;
@@ -48,7 +47,6 @@ import { acceptsModality, fileModality, type ModelInfo } from '$lib/contracts';
     config = null,
     modelInfo = {},
     onConfigChange,
-    onModeChange,
     agentId = null,
     onAgentChange,
     text = $bindable(''),
@@ -367,7 +365,6 @@ import { acceptsModality, fileModality, type ModelInfo } from '$lib/contracts';
           {modelInfo}
           {disabled}
           onConfigChange={(configId, value) => onConfigChange?.(configId, value)}
-          onModeChange={(modeId) => onModeChange?.(modeId)}
         />
 
         <Button

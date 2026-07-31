@@ -2,11 +2,12 @@ import { Elysia, t } from "elysia";
 import { requireAuth } from "$lib/server/auth";
 import { requireConversation } from "$lib/server/conversations";
 import { listMessages } from "$lib/server/messages";
+import { rewindForResend } from "$lib/server/rewind";
 import {
   attachMessageStream,
   cancelGeneration,
   sendMessageStream,
-} from "$lib/server/acp/pump";
+} from "$lib/server/engine/core/turn-runner";
 
 export const messagesRoute = new Elysia({ prefix: "/api/conversations" })
   .get(
@@ -84,6 +85,48 @@ export const messagesRoute = new Elysia({ prefix: "/api/conversations" })
     },
   )
 
+  .post(
+    "/:id/messages/:messageId/edit",
+    async (context) => {
+      requireAuth(context);
+      const conv = await requireConversation(context.params.id);
+      const input = await rewindForResend(
+        conv,
+        context.params.messageId,
+        "edit",
+        context.body.text,
+      );
+      return sendMessageStream(conv, input, context.request.signal);
+    },
+    {
+      params: t.Object({ id: t.String(), messageId: t.String() }),
+      body: t.Object({ text: t.String({ minLength: 1 }) }),
+      detail: {
+        summary: "Edit a user message",
+        tags: ["Messages"],
+        description:
+          "Rewind the engine context to before this user turn, replace it with new text, and stream the fresh reply",
+      },
+    },
+  )
+  .post(
+    "/:id/messages/:messageId/regenerate",
+    async (context) => {
+      requireAuth(context);
+      const conv = await requireConversation(context.params.id);
+      const input = await rewindForResend(conv, context.params.messageId, "regenerate");
+      return sendMessageStream(conv, input, context.request.signal);
+    },
+    {
+      params: t.Object({ id: t.String(), messageId: t.String() }),
+      detail: {
+        summary: "Regenerate an assistant message",
+        tags: ["Messages"],
+        description:
+          "Rewind the engine context to before the preceding user turn and re-run it, streaming the fresh reply",
+      },
+    },
+  )
   .post(
     "/:id/abort",
     async (context) => {
