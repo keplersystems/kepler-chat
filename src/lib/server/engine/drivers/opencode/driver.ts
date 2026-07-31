@@ -308,6 +308,7 @@ function createEventTranslator(
   const assistantMessages = new Set<string>();
 
   let title: string | null = null;
+  let providerError: string | null = null;
 
   const appendTail = async (
     partId: string,
@@ -399,6 +400,10 @@ function createEventTranslator(
           await appendTail(part.id, "reasoning", part.text);
         } else if (part.type === "tool" && part.tool !== "todowrite") {
           await handleToolPart(part);
+        } else if (part.type === "retry") {
+          // opencode retries with growing backoff and reports nothing on the
+          // message, so without this a doomed turn just looks slow.
+          providerError = `${extractErrorMessage(part.error)} (attempt ${part.attempt})`;
         }
         return;
       }
@@ -418,6 +423,10 @@ function createEventTranslator(
           console.error("OpenCode question reply failed:", error);
         });
         return;
+      case "session.error":
+        if (event.properties.sessionID !== sessionID) return;
+        if (event.properties.error) providerError = extractErrorMessage(event.properties.error);
+        return;
       case "session.updated":
         if (event.properties.info.id !== sessionID) return;
         title = realTitle(event.properties.info.title) ?? title;
@@ -429,6 +438,7 @@ function createEventTranslator(
     handle,
     streamed,
     titleFromEvents: () => title,
+    providerError: () => providerError,
   };
 }
 
@@ -673,6 +683,17 @@ export function createOpencodeDriver(): EngineDriver {
           if (part.text.length > seen) await sink.appendText("text", part.text.slice(seen));
         }
 
+        // A provider failure is often reported only on the event stream, and the
+        // message comes back clean and empty, which reads as a silent hang. Only
+        // claim it when the turn produced nothing: opencode's title agent runs on
+        // this same session, and its failures are not this turn's failure.
+        const producedReply = response.data.parts.some(
+          (part) => part.type === "text" && !part.synthetic && !part.ignored,
+        );
+        if (!info.error && !signal.aborted && !producedReply) {
+          const reported = translator.providerError();
+          if (reported) throw new Error(reported);
+        }
         let stopReason = mapStopReason(info);
         if (signal.aborted) stopReason = "cancelled";
 

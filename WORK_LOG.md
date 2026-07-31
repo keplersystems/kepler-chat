@@ -1,5 +1,37 @@
 # Work Log
 
+## 2026-08-01 — Failures made legible; shared-conversation management
+
+**Provider errors reach the UI.** opencode reports a provider failure only on
+the event stream: `session.error`, and `retry` parts carrying an `ApiError` with
+the attempt number. The message itself comes back clean and empty, which is why
+"credits depleted" cost 66 seconds of silence and lived only in a log file. The
+translator now captures both and the driver throws with the real text.
+
+Scoped deliberately: opencode's **title agent runs on the same session id** and
+fails on every turn here (`small_model` points at fireworks-firepass, whose key
+is invalid), so an unguarded `session.error` would fail perfectly good turns.
+The captured error is only claimed when the turn produced no text of its own.
+Verified both directions: a working turn is unaffected by the background title
+failure, and a turn against the invalid-key provider now reads "The API key you
+provided is invalid." instead of nothing.
+
+**Elapsed time while a turn runs.** A doomed request retried with growing
+backoff and the UI just said "Thinking…". Now the indicator carries a counter,
+hidden for the first 3 seconds so ordinary replies stay unadorned. Verified
+live at "Thinking… 12s". No hard deadline: work-mode turns are legitimately
+long, and killing them would trade one wrong behaviour for another.
+
+**Turns that end with nothing to read say so.** `finalize()` only caught turns
+with zero parts, so a model that emits reasoning and stops (observed on gemini)
+rendered as a blank bubble. A turn that ends normally with no text and no file
+part is now reported as ending without a reply. NOT yet observed firing: the
+gemini stop was transient and I could not reproduce it on demand.
+
+**Settings → Sharing** lists every conversation with a live public link, with
+copy and stop-sharing per row, since previously nothing revealed what was
+public except opening each conversation.
+
 ## 2026-07-31 — Share links, header actions
 
 Header now carries branch, the generated-files toggle, and Share, top right per

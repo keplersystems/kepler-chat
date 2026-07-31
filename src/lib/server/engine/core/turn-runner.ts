@@ -192,6 +192,19 @@ class AssistantAccumulator {
     }
   }
 
+  /**
+   * Reasoning and tool calls are not an answer. A turn that ends normally with
+   * nothing to read renders as a blank bubble, so it says so instead.
+   */
+  private silence(stopReason: StopReason): string | undefined {
+    if (!this.announced) return "The model returned an empty response.";
+    if (stopReason !== "end_turn") return undefined;
+    const readable = this.parts.some(
+      (entry) => entry.view.type === "text" || entry.view.type === "file",
+    );
+    return readable ? undefined : "The model ended the turn without a reply.";
+  }
+
   async finalize(fields: {
     stopReason: StopReason;
     error?: string;
@@ -199,10 +212,7 @@ class AssistantAccumulator {
     tokens?: TurnTokens;
   }): Promise<MessageView | null> {
     if (this.flushTimer) clearInterval(this.flushTimer);
-    // A turn that ends without producing anything is still an outcome. Dropping
-    // it leaves the thread sitting on a reply that is never coming.
-    const error =
-      fields.error ?? (this.announced ? undefined : "The model returned an empty response.");
+    const error = fields.error ?? this.silence(fields.stopReason);
     await this.announce();
     // A turn can end while tool calls are still open (cancel, agent crash);
     // leaving them pending would render as perpetually in-flight.

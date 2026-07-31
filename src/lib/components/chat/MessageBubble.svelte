@@ -23,6 +23,8 @@
     mode?: ConversationMode;
     /** True while this message is the one currently being generated. */
     streaming?: boolean;
+    /** Time this turn has been running, blank until it is worth mentioning. */
+    elapsedLabel?: string;
     /** Rewind-and-replace; passed only when the engine can truly rewind. */
     onEdit?: (message: MessageView, text: string) => void;
     onRegenerate?: (message: MessageView) => void;
@@ -34,6 +36,7 @@
     message,
     mode = "work",
     streaming = false,
+    elapsedLabel = "",
     onEdit,
     onRegenerate,
     onBranchAt,
@@ -176,7 +179,12 @@
         </div>
       {/if}
       {#if streaming && !blockOwnsIndicator}
-        <ThinkingOrb size={20} state="composing" class="mt-1 opacity-80" />
+        <div class="mt-1 flex items-center gap-2">
+          <ThinkingOrb size={20} state="composing" class="opacity-80" />
+          {#if elapsedLabel}
+            <span class="text-xs tabular-nums text-muted-foreground">{elapsedLabel}</span>
+          {/if}
+        </div>
       {/if}
     </div>
   {/if}

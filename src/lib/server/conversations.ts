@@ -1,5 +1,5 @@
 import { cp, rm } from "node:fs/promises";
-import { eq } from "drizzle-orm";
+import { eq, isNotNull } from "drizzle-orm";
 import type { AgentId, ConversationMode } from "$lib/contracts";
 import { driverFor } from "$lib/server/engine/registry";
 import { db } from "$lib/server/db/client";
@@ -186,6 +186,23 @@ export async function shareConversation(id: string): Promise<{ token: string }> 
   const token = `${generateId()}${generateId()}`;
   await db.update(conversation).set({ share_token: token }).where(eq(conversation.id, id));
   return { token };
+}
+
+/** Every conversation currently readable by anyone holding its link. */
+export async function listSharedConversations(): Promise<
+  Array<{ id: string; title: string; token: string; updated_at: Date }>
+> {
+  const rows = await db.query.conversation.findMany({
+    where: isNotNull(conversation.share_token),
+  });
+  return rows
+    .map((row) => ({
+      id: row.id,
+      title: row.title,
+      token: row.share_token as string,
+      updated_at: row.updated_at,
+    }))
+    .sort((a, b) => b.updated_at.getTime() - a.updated_at.getTime());
 }
 
 export async function unshareConversation(id: string): Promise<void> {

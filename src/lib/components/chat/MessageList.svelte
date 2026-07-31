@@ -28,6 +28,29 @@
   let atBottom = $state(true);
 
   const lastMessageId = $derived(messages.at(-1)?.id);
+
+  // A stalled turn is indistinguishable from a slow one without this; the
+  // count stays hidden for the first seconds so normal replies are unadorned.
+  let elapsedSeconds = $state(0);
+  $effect(() => {
+    if (!isStreaming) return;
+    const startedAt = Date.now();
+    const timer = setInterval(
+      () => (elapsedSeconds = Math.floor((Date.now() - startedAt) / 1000)),
+      1000,
+    );
+    return () => {
+      clearInterval(timer);
+      elapsedSeconds = 0;
+    };
+  });
+
+  function formatElapsed(seconds: number): string {
+    if (seconds < 60) return `${seconds}s`;
+    return `${Math.floor(seconds / 60)}m ${String(seconds % 60).padStart(2, "0")}s`;
+  }
+
+  const elapsedLabel = $derived(elapsedSeconds >= 3 ? formatElapsed(elapsedSeconds) : "");
   const showThinking = $derived(isStreaming && messages.at(-1)?.role !== "assistant");
 
   function measureAtBottom() {
@@ -65,6 +88,7 @@
             {message}
             {mode}
             streaming={isStreaming && message.id === lastMessageId && message.role === "assistant"}
+            {elapsedLabel}
             {onEdit}
             {onRegenerate}
             {onBranchAt}
@@ -79,6 +103,9 @@
         >
           <ThinkingOrb size={20} state="working" />
           <span class="t-shimmer text-sm" data-text="Thinking…">Thinking…</span>
+          {#if elapsedLabel}
+            <span class="text-xs tabular-nums text-muted-foreground">{elapsedLabel}</span>
+          {/if}
         </div>
       {/if}
     </div>

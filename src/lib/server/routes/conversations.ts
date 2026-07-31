@@ -8,6 +8,7 @@ import {
   deleteConversation,
   renameConversation,
   requireConversation,
+  listSharedConversations,
   shareConversation,
   unshareConversation,
 } from "$lib/server/conversations";
@@ -85,6 +86,20 @@ export const conversationsRoute = new Elysia({ prefix: "/api/conversations" })
         tags: ["Conversations"],
         description:
           "Fork a conversation (working directory, history, and session when supported) into a new conversation",
+      },
+    },
+  )
+  .get(
+    "/shared",
+    async (context) => {
+      requireAuth(context);
+      return { conversations: await listSharedConversations() };
+    },
+    {
+      detail: {
+        summary: "List shared conversations",
+        tags: ["Conversations"],
+        description: "Every conversation with a live public link",
       },
     },
   )
